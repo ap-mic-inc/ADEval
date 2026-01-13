@@ -1,0 +1,6 @@
+[v-cloak] { display: none; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+.dark ::-webkit-scrollbar-thumb { background: #475569; }
+.transition-theme { transition: background-color 0.3s, color 0.3s, border-color 0.3s; }
+textarea { field-sizing: content; min-height: 2.5rem; }
