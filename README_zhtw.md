@@ -4,7 +4,7 @@
 
 ADEval 是一款專為 Google Agent Development Kit (ADK) 開發者設計的評估工具。它提供了直觀的 Web UI，讓你能夠系統化地測試 Agent 的 **Q-Tools-A (Question -> Tools -> Answer)** 流程，並支援實驗管理、批次測試與完整追蹤（Tracing）。
 
-**GitHub Repository:** [https://github.com/simonliu-ai-product/ADEval](https://github.com/simonliu-ai-product/ADEval)
+**GitHub Repository:** [https://github.com/ap-mic-inc/rd-ADEval](https://github.com/ap-mic-inc/rd-ADEval)
 
 ![Playground](snapshot/playground.png)
 ![Batch Evaluation](snapshot/batch_evaluation.png)
@@ -35,7 +35,7 @@ ADEval 是一款專為 Google Agent Development Kit (ADK) 開發者設計的評�
 進入工具目錄並以開發模式安裝：
 
 ```bash
-git clone https://github.com/simonliu-ai-product/ADEval.git
+git clone https://github.com/ap-mic-inc/rd-ADEval.git
 cd ADEval
 pip install -e .
 ```
