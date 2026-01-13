@@ -4,6 +4,9 @@ ADEval 是一款專為 Google Agent Development Kit (ADK) 開發者設計的評�
 
 **GitHub Repository:** [https://github.com/simonliu-ai-product/ADEval](https://github.com/simonliu-ai-product/ADEval)
 
+![Playground](snapshot/playground.png)
+![Batch Evaluation](snapshot/batch_evaluation.png)
+
 ## 🌟 功能亮點
 
 - **專為 Google ADK 設計**: 完美相容於 ADK 的 `/run` 與 `/list-apps` API 規範。
