@@ -6,7 +6,7 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     package_data={
-        "adeval": ["static/*"],
+        "adeval": ["static/*", "static/css/*", "static/js/*"],
     },
     install_requires=[
         "fastapi",
