@@ -1,15 +1,18 @@
-# ADEval - Agent Evaluation System 🤖
+# ADEval - Google Agent Development Kit (ADK) AI Agent Evaluation System 🤖
 
-ADEval 是一款專為 AI Agent 開發者設計的評估工具。它提供了直觀的 Web UI，讓你能夠系統化地測試 Agent 的 **Q-Tools-A (Question -> Tools -> Answer)** 流程，並支援實驗管理、批次測試與完整追蹤（Tracing）。
+ADEval 是一款專為 Google Agent Development Kit (ADK) 開發者設計的評估工具。它提供了直觀的 Web UI，讓你能夠系統化地測試 Agent 的 **Q-Tools-A (Question -> Tools -> Answer)** 流程，並支援實驗管理、批次測試與完整追蹤（Tracing）。
+
+**GitHub Repository:** [https://github.com/simonliu-ai-product/ADEval](https://github.com/simonliu-ai-product/ADEval)
 
 ## 🌟 功能亮點
 
+- **專為 Google ADK 設計**: 完美相容於 ADK 的 `/run` 與 `/list-apps` API 規範。
 - **實驗管理 (Experiment Management)**:
   - 支援多個獨立實驗，資料自動儲存於本地 `.adeval/` 資料夾。
   - 完整記錄實驗名稱、User ID、Agent API URL 與所有測試案例。
 - **Q-Tools-A 驗證**:
-  - **Question (Q)**: 靈活設定測試問題。
-  - **Tools**: 自動驗證 Agent 是否呼叫了預期的工具（支援多工具無序驗證）。
+  - **Question (Q)**: 靈活設定測試問題與 Session State。
+  - **Tools**: 自動驗證 Agent 是否呼叫了預期的工具（支援參數順序無感化的智慧比對）。
   - **Answer (A)**: 關鍵字比對，確保 Agent 回答符合預期。
 - **視覺化 Trace (追蹤)**:
   - 一鍵展開原始 API 回覆，以深色終端機風格顯示完整 JSON 事件流。
@@ -18,8 +21,8 @@ ADEval 是一款專為 AI Agent 開發者設計的評估工具。它提供了直
   - 支援匯出「題庫備份」或「測試結果報告」。
   - 具備即時進度條與完成率統計。
 - **現代化介面**:
-  - 基於 Vue.js 3 與 Tailwind CSS 打造的高質感 UI。
-  - 支援 UTF-8 編碼，完美顯示中文字符。
+  - 支援 **Dark / Light Mode** 切換。
+  - 基於 Vue.js 3 與 Tailwind CSS 打造的高質感響應式 UI。
 
 ## 🚀 快速開始
 
@@ -27,7 +30,8 @@ ADEval 是一款專為 AI Agent 開發者設計的評估工具。它提供了直
 進入工具目錄並以開發模式安裝：
 
 ```bash
-cd adeval-tool
+git clone https://github.com/simonliu-ai-product/ADEval.git
+cd ADEval
 pip install -e .
 ```
 
@@ -51,7 +55,7 @@ adeval ui --port 8081 --host 0.0.0.0
 如果你偏好使用 Docker，可以使用以下指令進行建置與執行：
 
 ### 1. 建置 Docker 映像檔
-在 `adeval-tool` 目錄下執行：
+在專案目錄下執行：
 
 ```bash
 docker build -t adeval:latest .
@@ -86,4 +90,4 @@ docker run -d \
 - **CLI**: Typer - 簡單易用的命令行工具。
 
 ---
-ADEval - 讓 Agent 評估變得更簡單、更專業。
+ADEval - 讓 Google ADK Agent 評估變得更簡單、更專業。
