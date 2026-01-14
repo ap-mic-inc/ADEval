@@ -7,9 +7,25 @@ import requests
 import uuid
 import os
 import json
+import urllib3
 from typing import List, Optional, Any
 
 app = FastAPI(title="ADEval Server")
+
+def request_with_retry(method, url, **kwargs):
+    """
+    Perform an HTTP request with automatic SSL verification retry.
+    If it fails due to SSL certificate verification, it retries with verify=False.
+    """
+    try:
+        return requests.request(method, url, **kwargs)
+    except requests.exceptions.SSLError:
+        # Suppress insecure request warnings only when we actually skip verification
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        kwargs["verify"] = False
+        return requests.request(method, url, **kwargs)
+    except Exception as e:
+        raise e
 
 # Data Directory Management
 BASE_DIR = os.getcwd()
@@ -89,7 +105,7 @@ def delete_experiment(exp_id: str):
 @app.get("/api/list-apps")
 def list_apps(api_url: str):
     try:
-        res = requests.get(f"{api_url}/list-apps", timeout=5)
+        res = request_with_retry("GET", f"{api_url}/list-apps", timeout=5)
         data = res.json()
         return {"apps": data} if isinstance(data, list) else data
     except Exception as e:
@@ -108,7 +124,7 @@ def run_test(req: EvalRequest):
     # 1. Create Session with State
     create_url = f"{req.api_url}/apps/{req.app_name}/users/{req.user_id}/sessions/{session_id}"
     try:
-        requests.post(create_url, json=state_obj, timeout=10)
+        request_with_retry("POST", create_url, json=state_obj, timeout=10)
     except: pass
 
     payload = {
@@ -120,7 +136,7 @@ def run_test(req: EvalRequest):
     }
     
     try:
-        response = requests.post(f"{req.api_url}/run", json=payload, timeout=45)
+        response = request_with_retry("POST", f"{req.api_url}/run", json=payload, timeout=45)
         if response.status_code == 200:
             events = response.json()
             tools_called = []
