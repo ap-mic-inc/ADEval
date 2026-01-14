@@ -138,7 +138,7 @@ createApp({
             const cases = currentExp.value.testCases;
 
             const normalizeTool = (t) => {
-                const match = t.match(/^([^(]+)\(.*\)$/);
+                const match = t.match(/^([^(]+)\((.*)\)$/);
                 if (!match) return t.trim().toLowerCase();
                 const name = match[1].trim().toLowerCase();
                 const args = match[2].split(',')
