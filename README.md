@@ -4,7 +4,8 @@
 
 ADEval is an evaluation tool designed specifically for developers using the Google Agent Development Kit (ADK). It provides an intuitive Web UI that allows you to systematically test your Agent's **Q-Tools-A (Question -> Tools -> Answer)** flow, supporting experiment management, batch testing, and comprehensive tracing.
 
-**GitHub Repository:** [https://github.com/ap-mic-inc/ADEval](https://github.com/ap-mic-inc/ADEval)
+**GitHub Repository:** [https://github.com/ap-mic-inc/ADEval](https://github.com/ap-mic-inc/ADEval)  
+**Detailed Documentation:** [docs/index.md](docs/index.md)
 
 ![Playground](snapshot/playground.png)
 ![Batch Evaluation](snapshot/batch_evaluation.png)
@@ -93,6 +94,23 @@ All experiment data is stored in the `.adeval` folder under your execution direc
 - **Backend**: FastAPI (Python) - Handles API proxying, static file hosting, and data persistence.
 - **Frontend**: Vue.js 3 + Tailwind CSS - Responsive Single Page Application (SPA).
 - **CLI**: Typer - Simple and easy-to-use command-line tool.
+
+## VIII. About the Author
+
+**Simon Liu**  
+APMIC MLOps Engineer x Google Developer Expert (GDE) in AI
+
+A technology enthusiast in the field of artificial intelligence solutions, focusing on assisting enterprises in implementing generative AI, MLOps, and Large Language Model (LLM) technologies to drive digital transformation and practical technological implementation.
+
+Currently also a Google Developer Expert (GDE) in the GenAI field, actively participating in technology communities, promoting the application and development of AI technology through technical articles, speeches, and practical experience sharing. To date, he has published over a hundred technical articles on platforms like Medium, covering topics such as generative AI, RAG, and AI Agents, and has served as a speaker at numerous technical seminars, sharing practical applications of AI and generative AI.
+
+**Related Links:**
+- APMIC Official Website: [https://www.apmic.ai/](https://www.apmic.ai/)
+- Personal Social Media Links: [https://simonliuyuwei.my.canva.site/link-in-bio](https://simonliuyuwei.my.canva.site/link-in-bio)
+
+## IX. License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
 
 ---
 ADEval - Making Google ADK Agent evaluation simpler and more professional.

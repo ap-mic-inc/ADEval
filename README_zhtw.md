@@ -4,7 +4,8 @@
 
 ADEval 是一款專為 Google Agent Development Kit (ADK) 開發者設計的評估工具。它提供了直觀的 Web UI，讓你能夠系統化地測試 Agent 的 **Q-Tools-A (Question -> Tools -> Answer)** 流程，並支援實驗管理、批次測試與完整追蹤（Tracing）。
 
-**GitHub Repository:** [https://github.com/ap-mic-inc/ADEval](https://github.com/ap-mic-inc/ADEval)
+**GitHub Repository:** [https://github.com/ap-mic-inc/ADEval](https://github.com/ap-mic-inc/ADEval)  
+**詳細說明文件：** [docs/zh-tw/index.md](docs/zh-tw/index.md)
 
 ![Playground](snapshot/playground.png)
 ![Batch Evaluation](snapshot/batch_evaluation.png)
@@ -93,6 +94,23 @@ docker run -d \
 - **Backend**: FastAPI (Python) - 負責 API 代理、靜態檔案託管與資料持久化。
 - **Frontend**: Vue.js 3 + Tailwind CSS - 響應式單頁應用 (SPA)。
 - **CLI**: Typer - 簡單易用的命令行工具。
+
+## VIII. 關於作者
+
+**Simon Liu**  
+APMIC MLOps 工程師 x Google Developer Expert (GDE) in AI
+
+人工智慧解決方案領域的技術愛好者，專注於協助企業導入生成式 AI、MLOps 和大型語言模型 (LLM) 技術，推動數位轉型與實務技術落地。
+
+目前同時也是 GenAI 領域的 Google Developer Expert (GDE)，積極參與技術社群，透過技術文章、演講與實戰經驗分享，推廣 AI 技術的應用與發展。至今已在 Medium 等平台發表超過百篇技術文章，涵蓋生成式 AI、RAG、AI Agents 等主題，並曾受邀擔任多場技術研討會講師，分享 AI 與生成式 AI 的實務應用。
+
+**相關連結：**
+- APMIC 官方網站：[https://www.apmic.ai/](https://www.apmic.ai/)
+- 個人社群連結：[https://simonliuyuwei.my.canva.site/link-in-bio](https://simonliuyuwei.my.canva.site/link-in-bio)
+
+## IX. 授權協議
+
+本專案採用 Apache License 2.0 授權。詳情請參閱 [LICENSE](LICENSE) 檔案。
 
 ---
 ADEval - 讓 Google ADK Agent 評估變得更簡單、更專業。
