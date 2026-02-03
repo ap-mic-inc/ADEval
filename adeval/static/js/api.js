@@ -25,3 +25,35 @@ async function listAppsApi(apiUrl) {
 async function runTestApi(payload) {
     return await apiCall('/api/run-test', 'POST', payload);
 }
+
+async function runSseApi(apiUrl, payload, onEvent) {
+    const res = await fetch('/api/run-sse-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, apiUrl })
+    });
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+            if (line.startsWith('data: ')) {
+                try {
+                    const data = JSON.parse(line.slice(6));
+                    onEvent(data);
+                } catch (e) {
+                    console.error("Failed to parse SSE data", e);
+                }
+            }
+        }
+    }
+}

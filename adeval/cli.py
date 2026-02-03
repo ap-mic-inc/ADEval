@@ -2,7 +2,7 @@ import typer
 import uvicorn
 import webbrowser
 import os
-from .server import app
+from .server import app, BASE_DIR
 
 # Create the Typer app
 cli = typer.Typer(help="ADEval - Agent Evaluation System")
@@ -17,7 +17,7 @@ def launch_ui(
     """
     url = f"http://{host}:{port}"
     typer.echo(f"🚀 Starting ADEval UI at {url}")
-    typer.echo(f"📂 Data will be stored in: {os.path.join(os.getcwd(), '.adeval')}")
+    typer.echo(f"📂 Data will be stored in: {os.path.join(BASE_DIR, '.adeval')}")
     
     # Auto-open browser
     try:

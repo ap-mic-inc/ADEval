@@ -102,6 +102,7 @@
                     <div class="flex space-x-12">
                         <button @click="tab = 'single'" :class="tab === 'single' ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-400 dark:text-gray-600'" class="pb-4 border-b-4 font-black text-xs uppercase tracking-widest transition-all">Playground</button>
                         <button @click="tab = 'batch'" :class="tab === 'batch' ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-400 dark:text-gray-600'" class="pb-4 border-b-4 font-black text-xs uppercase tracking-widest transition-all">Batch Evaluation</button>
+                        <button @click="tab = 'compare'" :class="tab === 'compare' ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400' : 'border-transparent text-gray-400 dark:text-gray-600'" class="pb-4 border-b-4 font-black text-xs uppercase tracking-widest transition-all">Comparison</button>
                     </div>
 
                     <div v-if="currentExp" class="flex items-center space-x-2 bg-white dark:bg-darkcard p-1 rounded-xl border dark:border-gray-700 transition-theme mb-2 shadow-sm">
@@ -124,6 +125,61 @@
                 <div v-if="!currentExp" class="flex flex-col items-center justify-center h-96 text-gray-200 dark:text-gray-800">
                     <i class="fas fa-flask fa-6x mb-6 opacity-10"></i>
                     <p class="font-black text-sm tracking-[0.2em] uppercase text-center">Ready to evaluate<br><span class="text-[10px] font-normal lowercase tracking-normal text-gray-400">Please select or create an experiment in the sidebar</span></p>
+                </div>
+
+                <!-- Single Playground View -->
+                <div v-else-if="tab === 'single'" class="bg-white dark:bg-darkcard p-10 rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm transition-theme">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-16">
+                        <div class="space-y-10">
+                            <div>
+                                <h3 class="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">01. Agent Selection</h3>
+                                <select v-model="single.appName" class="w-full border-2 border-gray-100 dark:border-gray-800 rounded-2xl p-5 focus:ring-8 focus:ring-indigo-50 dark:focus:ring-indigo-900/20 focus:border-indigo-600 dark:focus:border-indigo-400 outline-none bg-gray-50 dark:bg-gray-900 font-bold transition-all duration-300 text-gray-700 dark:text-gray-300">
+                                    <option v-for="app in apps" :value="app">{{ app }}</option>
+                                </select>
+                            </div>
+                            <div>
+                                <h3 class="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">02. Question & State Input</h3>
+                                <div class="space-y-4">
+                                    <textarea v-model="single.q" rows="4" class="w-full border-2 border-gray-100 dark:border-gray-800 rounded-[2rem] p-8 focus:ring-8 focus:ring-indigo-50 dark:focus:ring-indigo-900/20 focus:border-indigo-600 dark:focus:border-indigo-400 outline-none bg-gray-50 dark:bg-gray-900 font-bold transition-all duration-300 resize-none text-lg text-gray-700 dark:text-gray-200" placeholder="Ask your agent something..."></textarea>
+                                    <div class="bg-gray-50 dark:bg-gray-900 rounded-2xl p-4 border-2 border-gray-100 dark:border-gray-800 transition-theme">
+                                        <p class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase mb-2 tracking-widest">Session State (JSON)</p>
+                                        <textarea v-model="single.state" rows="3" class="w-full bg-transparent font-mono text-xs text-gray-500 dark:text-gray-400 outline-none resize-none" placeholder='{"key": "value"}'></textarea>
+                                    </div>
+                                </div>
+                            </div>
+                            <button @click="runSingle" :disabled="isRunning" class="group w-full bg-indigo-600 text-white font-black py-6 rounded-[2rem] hover:bg-black dark:hover:bg-indigo-500 transition-all duration-500 shadow-2xl shadow-indigo-200 dark:shadow-none text-xl tracking-widest">
+                                <span v-if="!isRunning" class="flex items-center justify-center font-black">RUN TEST <i class="fas fa-arrow-right ml-4 group-hover:translate-x-2 transition-transform"></i></span>
+                                <span v-else class="flex items-center justify-center font-black"><i class="fas fa-circle-notch fa-spin mr-4"></i> ANALYZING...</span>
+                            </button>
+                        </div>
+                        <div class="flex flex-col h-full">
+                            <h3 class="text-xs font-black text-emerald-500 uppercase tracking-widest mb-4">03. Trace Results</h3>
+                            <div class="bg-gray-950 rounded-[2.5rem] p-10 flex-1 font-mono text-sm shadow-2xl relative overflow-hidden group border dark:border-gray-800 min-h-[400px] transition-theme">
+                                <div class="absolute -top-10 -right-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl group-hover:bg-indigo-500/20 transition-all duration-700"></div>
+                                <div v-if="single.result" class="space-y-10 relative z-10 overflow-y-auto max-h-[600px] pr-4">
+                                    <div class="space-y-4 text-left">
+                                        <div class="text-[10px] text-emerald-400 font-black uppercase tracking-[0.2em] border-b border-white/10 pb-2">Tools Invoked</div>
+                                        <div class="text-gray-300 leading-relaxed bg-white/5 p-4 rounded-xl border border-white/5 whitespace-pre-line">{{ single.result.tools }}</div>
+                                    </div>
+                                    <div class="space-y-4 text-left">
+                                        <div class="text-[10px] text-indigo-400 font-black uppercase tracking-[0.2em] border-b border-white/10 pb-2">Model Output</div>
+                                        <div class="text-gray-100 leading-relaxed text-base">{{ single.result.answer }}</div>
+                                    </div>
+                                    <div class="space-y-4 text-left">
+                                        <div class="text-[10px] text-amber-400 font-black uppercase tracking-[0.2em] border-b border-white/10 pb-2 flex justify-between items-center">
+                                            <span>Full JSON Trace</span>
+                                            <button @click="copyTrace(single.result.raw_response)" class="hover:text-white transition"><i class="fas fa-copy"></i></button>
+                                        </div>
+                                        <pre class="text-[10px] text-gray-500 bg-black/30 p-4 rounded-xl overflow-x-auto">{{ JSON.stringify(single.result.raw_response, null, 4) }}</pre>
+                                    </div>
+                                </div>
+                                <div v-else class="h-full flex flex-col items-center justify-center text-gray-700 space-y-6 text-center">
+                                    <i class="fas fa-ghost fa-4x opacity-20"></i>
+                                    <p class="text-[10px] font-black uppercase tracking-[0.3em]">Awaiting execution</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Batch View -->
@@ -256,56 +312,111 @@
                     </div>
                 </div>
 
-                <!-- Single Playground View -->
-                <div v-else-if="tab === 'single'" class="bg-white dark:bg-darkcard p-10 rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm transition-theme">
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-16">
-                        <div class="space-y-10">
+                <!-- Comparison View -->
+                <div v-else-if="tab === 'compare'" class="space-y-8">
+                    <div class="bg-white dark:bg-darkcard p-8 rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm transition-theme">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
                             <div>
-                                <h3 class="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">01. Agent Selection</h3>
-                                <select v-model="single.appName" class="w-full border-2 border-gray-100 dark:border-gray-800 rounded-2xl p-5 focus:ring-8 focus:ring-indigo-50 dark:focus:ring-indigo-900/20 focus:border-indigo-600 dark:focus:border-indigo-400 outline-none bg-gray-50 dark:bg-gray-900 font-bold transition-all duration-300 text-gray-700 dark:text-gray-300">
+                                <h3 class="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-2">Agent 1</h3>
+                                <select v-model="compare.agent1" class="w-full border-2 border-gray-100 dark:border-gray-800 rounded-xl p-3 focus:ring-4 focus:ring-indigo-50 dark:focus:ring-indigo-900/20 focus:border-indigo-600 dark:focus:border-indigo-400 outline-none bg-gray-50 dark:bg-gray-900 font-bold transition-all text-sm text-gray-700 dark:text-gray-300">
                                     <option v-for="app in apps" :value="app">{{ app }}</option>
                                 </select>
                             </div>
                             <div>
-                                <h3 class="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-4">02. Question & State Input</h3>
-                                <div class="space-y-4">
-                                    <textarea v-model="single.q" rows="4" class="w-full border-2 border-gray-100 dark:border-gray-800 rounded-[2rem] p-8 focus:ring-8 focus:ring-indigo-50 dark:focus:ring-indigo-900/20 focus:border-indigo-600 dark:focus:border-indigo-400 outline-none bg-gray-50 dark:bg-gray-900 font-bold transition-all duration-300 resize-none text-lg text-gray-700 dark:text-gray-200" placeholder="Ask your agent something..."></textarea>
-                                    <div class="bg-gray-50 dark:bg-gray-900 rounded-2xl p-4 border-2 border-gray-100 dark:border-gray-800 transition-theme">
-                                        <p class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase mb-2 tracking-widest">Session State (JSON)</p>
-                                        <textarea v-model="single.state" rows="3" class="w-full bg-transparent font-mono text-xs text-gray-500 dark:text-gray-400 outline-none resize-none" placeholder='{"key": "value"}'></textarea>
-                                    </div>
-                                </div>
+                                <h3 class="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-2">Agent 2</h3>
+                                <select v-model="compare.agent2" class="w-full border-2 border-gray-100 dark:border-gray-800 rounded-xl p-3 focus:ring-4 focus:ring-indigo-50 dark:focus:ring-indigo-900/20 focus:border-indigo-600 dark:focus:border-indigo-400 outline-none bg-gray-50 dark:bg-gray-900 font-bold transition-all text-sm text-gray-700 dark:text-gray-300">
+                                    <option v-for="app in apps" :value="app">{{ app }}</option>
+                                </select>
                             </div>
-                            <button @click="runSingle" :disabled="isRunning" class="group w-full bg-indigo-600 text-white font-black py-6 rounded-[2rem] hover:bg-black dark:hover:bg-indigo-500 transition-all duration-500 shadow-2xl shadow-indigo-200 dark:shadow-none text-xl tracking-widest">
-                                <span v-if="!isRunning" class="flex items-center justify-center font-black">RUN TEST <i class="fas fa-arrow-right ml-4 group-hover:translate-x-2 transition-transform"></i></span>
-                                <span v-else class="flex items-center justify-center font-black"><i class="fas fa-circle-notch fa-spin mr-4"></i> ANALYZING...</span>
+                            <button @click="runComparison" :disabled="isComparing" class="h-[48px] bg-indigo-600 text-white font-black rounded-xl hover:bg-black dark:hover:bg-indigo-500 transition-all shadow-lg text-sm tracking-widest disabled:opacity-50">
+                                <span v-if="!isComparing">RUN COMPARISON</span>
+                                <span v-else><i class="fas fa-circle-notch fa-spin mr-2"></i> COMPARING...</span>
                             </button>
                         </div>
-                        <div class="flex flex-col h-full">
-                            <h3 class="text-xs font-black text-emerald-500 uppercase tracking-widest mb-4">03. Trace Results</h3>
-                            <div class="bg-gray-950 rounded-[2.5rem] p-10 flex-1 font-mono text-sm shadow-2xl relative overflow-hidden group border dark:border-gray-800 min-h-[400px] transition-theme">
-                                <div class="absolute -top-10 -right-10 w-40 h-40 bg-indigo-500/10 rounded-full blur-3xl group-hover:bg-indigo-500/20 transition-all duration-700"></div>
-                                <div v-if="single.result" class="space-y-10 relative z-10 overflow-y-auto max-h-[600px] pr-4">
-                                    <div class="space-y-4 text-left">
-                                        <div class="text-[10px] text-emerald-400 font-black uppercase tracking-[0.2em] border-b border-white/10 pb-2">Tools Invoked</div>
-                                        <div class="text-gray-300 leading-relaxed bg-white/5 p-4 rounded-xl border border-white/5 whitespace-pre-line">{{ single.result.tools }}</div>
-                                    </div>
-                                    <div class="space-y-4 text-left">
-                                        <div class="text-[10px] text-indigo-400 font-black uppercase tracking-[0.2em] border-b border-white/10 pb-2">Model Output</div>
-                                        <div class="text-gray-100 leading-relaxed text-base">{{ single.result.answer }}</div>
-                                    </div>
-                                    <div class="space-y-4 text-left">
-                                        <div class="text-[10px] text-amber-400 font-black uppercase tracking-[0.2em] border-b border-white/10 pb-2 flex justify-between items-center">
-                                            <span>Full JSON Trace</span>
-                                            <button @click="copyTrace(single.result.raw_response)" class="hover:text-white transition"><i class="fas fa-copy"></i></button>
+                        <div class="mt-6">
+                            <h3 class="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-2">Comparison Query</h3>
+                            <input v-model="compare.query" @keyup.enter="runComparison" class="w-full border-2 border-gray-100 dark:border-gray-800 rounded-xl p-4 focus:ring-4 focus:ring-indigo-50 dark:focus:ring-indigo-900/20 focus:border-indigo-600 dark:focus:border-indigo-400 outline-none bg-gray-50 dark:bg-gray-900 font-bold transition-all text-gray-700 dark:text-gray-200" placeholder="Enter query to compare agents...">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <!-- Agent 1 Results -->
+                        <div class="bg-white dark:bg-darkcard p-8 rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm transition-theme flex flex-col min-h-[500px]">
+                            <h3 class="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-6 flex items-center">
+                                <i class="fas fa-robot mr-2"></i> Agent 1: {{ compare.agent1 || 'None' }}
+                            </h3>
+                            <div class="flex-1 space-y-4 overflow-y-auto pr-2">
+                                <div v-if="!compare.events1.length && !isComparing" class="h-full flex flex-col items-center justify-center text-gray-300 dark:text-gray-700">
+                                    <i class="fas fa-comment-slash fa-3x mb-4 opacity-20"></i>
+                                    <p class="text-[10px] font-black uppercase tracking-widest">No data</p>
+                                </div>
+                                <template v-for="(event, idx) in compare.events1" :key="idx">
+                                    <!-- Tool Calls -->
+                                    <div v-for="part in (event.content?.parts || [])" :key="part.functionCall?.name">
+                                        <div v-if="part.functionCall" class="bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-xl p-4 mb-3">
+                                            <div @click="part._expanded = !part._expanded" class="flex items-center justify-between cursor-pointer text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest" :class="part._expanded ? 'mb-2' : ''">
+                                                <span><i class="fas fa-tools mr-2"></i> Tool Call: {{ part.functionCall.name }}</span>
+                                                <i class="fas" :class="part._expanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                                            </div>
+                                            <pre v-if="part._expanded" class="text-[10px] font-mono text-amber-700 dark:text-amber-300 overflow-x-auto">{{ JSON.stringify(part.functionCall.args, null, 2) }}</pre>
                                         </div>
-                                        <pre class="text-[10px] text-gray-500 bg-black/30 p-4 rounded-xl overflow-x-auto">{{ JSON.stringify(single.result.raw_response, null, 4) }}</pre>
+                                        <div v-if="part.functionResponse" class="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/30 rounded-xl p-4 mb-3">
+                                            <div @click="part._expanded = !part._expanded" class="flex items-center justify-between cursor-pointer text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest" :class="part._expanded ? 'mb-2' : ''">
+                                                <span><i class="fas fa-check-circle mr-2"></i> Tool Response: {{ part.functionResponse.name }}</span>
+                                                <i class="fas" :class="part._expanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                                            </div>
+                                            <pre v-if="part._expanded" class="text-[10px] font-mono text-emerald-700 dark:text-emerald-300 overflow-x-auto">{{ JSON.stringify(part.functionResponse.response, null, 2) }}</pre>
+                                        </div>
+                                        <div v-if="part.text" class="bg-gray-50 dark:bg-gray-900/50 rounded-2xl p-6 border dark:border-gray-800">
+                                            <div class="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-3 border-b dark:border-gray-800 pb-2">Final Response</div>
+                                            <div class="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">{{ part.text }}</div>
+                                        </div>
                                     </div>
+                                </template>
+                            </div>
+                            <div v-if="compare.usage1" class="mt-4 pt-4 border-t dark:border-gray-800 flex justify-between text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                                <span>Tokens: {{ compare.usage1.totalTokenCount }}</span>
+                                <span class="text-indigo-500">P: {{ compare.usage1.promptTokenCount }} / C: {{ compare.usage1.candidatesTokenCount }}</span>
+                            </div>
+                        </div>
+
+                        <!-- Agent 2 Results -->
+                        <div class="bg-white dark:bg-darkcard p-8 rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm transition-theme flex flex-col min-h-[500px]">
+                            <h3 class="text-xs font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-6 flex items-center">
+                                <i class="fas fa-robot mr-2"></i> Agent 2: {{ compare.agent2 || 'None' }}
+                            </h3>
+                            <div class="flex-1 space-y-4 overflow-y-auto pr-2">
+                                <div v-if="!compare.events2.length && !isComparing" class="h-full flex flex-col items-center justify-center text-gray-300 dark:text-gray-700">
+                                    <i class="fas fa-comment-slash fa-3x mb-4 opacity-20"></i>
+                                    <p class="text-[10px] font-black uppercase tracking-widest">No data</p>
                                 </div>
-                                <div v-else class="h-full flex flex-col items-center justify-center text-gray-700 space-y-6 text-center">
-                                    <i class="fas fa-ghost fa-4x opacity-20"></i>
-                                    <p class="text-[10px] font-black uppercase tracking-[0.3em]">Awaiting execution</p>
-                                </div>
+                                <template v-for="(event, idx) in compare.events2" :key="idx">
+                                    <!-- Tool Calls -->
+                                    <div v-for="part in (event.content?.parts || [])" :key="part.functionCall?.name">
+                                        <div v-if="part.functionCall" class="bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-xl p-4 mb-3">
+                                            <div @click="part._expanded = !part._expanded" class="flex items-center justify-between cursor-pointer text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest" :class="part._expanded ? 'mb-2' : ''">
+                                                <span><i class="fas fa-tools mr-2"></i> Tool Call: {{ part.functionCall.name }}</span>
+                                                <i class="fas" :class="part._expanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                                            </div>
+                                            <pre v-if="part._expanded" class="text-[10px] font-mono text-amber-700 dark:text-amber-300 overflow-x-auto">{{ JSON.stringify(part.functionCall.args, null, 2) }}</pre>
+                                        </div>
+                                        <div v-if="part.functionResponse" class="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/30 rounded-xl p-4 mb-3">
+                                            <div @click="part._expanded = !part._expanded" class="flex items-center justify-between cursor-pointer text-[10px] font-black text-emerald-600 dark:text-emerald-400 uppercase tracking-widest" :class="part._expanded ? 'mb-2' : ''">
+                                                <span><i class="fas fa-check-circle mr-2"></i> Tool Response: {{ part.functionResponse.name }}</span>
+                                                <i class="fas" :class="part._expanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                                            </div>
+                                            <pre v-if="part._expanded" class="text-[10px] font-mono text-emerald-700 dark:text-emerald-300 overflow-x-auto">{{ JSON.stringify(part.functionResponse.response, null, 2) }}</pre>
+                                        </div>
+                                        <div v-if="part.text" class="bg-gray-50 dark:bg-gray-900/50 rounded-2xl p-6 border dark:border-gray-800">
+                                            <div class="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-3 border-b dark:border-gray-800 pb-2">Final Response</div>
+                                            <div class="text-sm text-gray-700 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">{{ part.text }}</div>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                            <div v-if="compare.usage2" class="mt-4 pt-4 border-t dark:border-gray-800 flex justify-between text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                                <span>Tokens: {{ compare.usage2.totalTokenCount }}</span>
+                                <span class="text-indigo-500">P: {{ compare.usage2.promptTokenCount }} / C: {{ compare.usage2.candidatesTokenCount }}</span>
                             </div>
                         </div>
                     </div>

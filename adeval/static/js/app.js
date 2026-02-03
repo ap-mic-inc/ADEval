@@ -11,8 +11,18 @@ createApp({
         const experiments = ref([]);
         const currentExp = ref(null);
         const isRunning = ref(false);
+        const isComparing = ref(false);
         const progress = ref(0);
         const single = ref({ appName: '', q: '1234 + 5678 = ?', state: '{}', result: null });
+        const compare = ref({
+            agent1: '',
+            agent2: '',
+            query: '',
+            events1: [],
+            events2: [],
+            usage1: null,
+            usage2: null
+        });
 
         const testCases = computed(() => currentExp.value ? currentExp.value.testCases : []);
 
@@ -63,6 +73,16 @@ createApp({
             config.value.apiUrl = exp.apiUrl || 'http://localhost:8000';
             single.value.appName = exp.testCases[0]?.appName || apps.value[0];
             single.value.state = '{}';
+            
+            // Set default compare agents
+            if (apps.value.length >= 2) {
+                compare.value.agent1 = apps.value[0];
+                compare.value.agent2 = apps.value[1];
+            } else if (apps.value.length === 1) {
+                compare.value.agent1 = apps.value[0];
+                compare.value.agent2 = apps.value[0];
+            }
+
             fetchApps();
         };
 
@@ -138,7 +158,7 @@ createApp({
             const cases = currentExp.value.testCases;
 
             const normalizeTool = (t) => {
-                const match = t.match(/^([^(]+)\((.*)\)$/);
+                const match = t.match(/^([^(]+)\(.*\)$/);
                 if (!match) return t.trim().toLowerCase();
                 const name = match[1].trim().toLowerCase();
                 const args = match[2].split(',')
@@ -152,7 +172,7 @@ createApp({
             for (let i = 0; i < cases.length; i++) {
                 const c = cases[i];
                 try {
-                    const data = await runTestApi({ 
+                    const data = await runTestApi({
                         app_name: c.appName, 
                         question: c.q, 
                         state: c.state,
@@ -207,7 +227,7 @@ createApp({
             reader.onload = async (ev) => {
                 const lines = ev.target.result.split('\n');
                 const newCases = lines.slice(1).filter(l => l.trim()).map(line => {
-                    const parts = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || line.split(',');
+                    const parts = line.match(/(".*?"|[^\",\s]+)(?=\s*,|\s*$)/g) || line.split(',');
                     const clean = (s) => s ? s.replace(/^"|"$/g, '').trim() : '';
                     return {
                         appName: clean(parts[0]) || apps.value[0],
@@ -259,6 +279,63 @@ createApp({
             alert('Trace copied to clipboard!');
         };
 
+        const runComparison = async () => {
+            if (!compare.value.agent1 || !compare.value.agent2 || !compare.value.query) return; 
+            
+            isComparing.value = true;
+            compare.value.events1 = [];
+            compare.value.events2 = [];
+            compare.value.usage1 = null;
+            compare.value.usage2 = null;
+
+            const runAgent = async (agentName, eventsKey, usageKey) => {
+                try {
+                    const data = await runTestApi({
+                        app_name: agentName,
+                        question: compare.value.query,
+                        state: '{}',
+                        api_url: config.value.apiUrl,
+                        user_id: config.value.userId
+                    });
+
+                    if (data.tools === "Error") {
+                        alert(`Agent ${agentName} Error: ${data.answer}`);
+                        return;
+                    }
+
+                    // 填充事件列表以供 UI 渲染
+                    compare.value[eventsKey] = data.raw_response.map(event => {
+                        if (event.content && event.content.parts) {
+                            event.content.parts = event.content.parts.map(part => {
+                                if (part.functionCall || part.functionResponse) {
+                                    return { ...part, _expanded: false };
+                                }
+                                return part;
+                            });
+                        }
+                        return event;
+                    });
+                    
+                    // 從 raw_response 中找最後一個包含 usageMetadata 的事件
+                    const lastEvent = [...data.raw_response].reverse().find(e => e.usageMetadata);
+                    if (lastEvent) {
+                        compare.value[usageKey] = lastEvent.usageMetadata;
+                    }
+                } catch (e) {
+                    console.error(`Failed to run agent ${agentName}`, e);
+                    alert(`Connection failed for ${agentName}.`);
+                }
+            };
+
+            // 並行執行兩個 Agent
+            await Promise.all([
+                runAgent(compare.value.agent1, 'events1', 'usage1'),
+                runAgent(compare.value.agent2, 'events2', 'usage2')
+            ]);
+
+            isComparing.value = false;
+        };
+
         onMounted(() => {
             fetchExperiments();
             if (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches) {
@@ -268,8 +345,8 @@ createApp({
         });
 
         return { 
-            tab, isDark, isFetching, saveStatus, config, apps, experiments, currentExp, testCases, single, isRunning, progress, 
-            toggleTheme, fetchApps, addCase, removeCase, runSingle, runAll, 
+            tab, isDark, isFetching, saveStatus, config, apps, experiments, currentExp, testCases, single, isRunning, isComparing, progress, compare,
+            toggleTheme, fetchApps, addCase, removeCase, runSingle, runAll, runComparison,
             handleFileUpload, exportQuestionBank, exportResults,
             createNewExperiment, loadExperiment, saveCurrentExperiment, deleteExperiment, copyTrace
         };

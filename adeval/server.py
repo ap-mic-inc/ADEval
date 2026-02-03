@@ -1,7 +1,7 @@
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import requests
 import uuid
@@ -28,7 +28,7 @@ def request_with_retry(method, url, **kwargs):
         raise e
 
 # Data Directory Management
-BASE_DIR = os.getcwd()
+BASE_DIR = os.getenv("ADEVAL_DATA_DIR", os.getcwd())
 ADEVAL_DIR = os.path.join(BASE_DIR, ".adeval")
 EXP_DIR = os.path.join(ADEVAL_DIR, "experiments")
 
@@ -162,6 +162,44 @@ def run_test(req: EvalRequest):
         return {"tools": "Error", "answer": f"API Error {response.status_code}", "raw_response": []}
     except Exception as e:
         return {"tools": "Error", "answer": str(e), "raw_response": []}
+
+@app.post("/api/run-sse-proxy")
+async def run_sse_proxy(request: Request):
+    data = await request.json()
+    api_url = data.pop("apiUrl", "http://localhost:8000").rstrip("/")
+    app_name = data.get("appName")
+    user_id = data.get("userId")
+    session_id = data.get("sessionId")
+    
+    # 1. 核心路徑固定為 /run_sse
+    target_url = f"{api_url}/run_sse"
+
+    # 2. 自動前置處理：建立 Session
+    if app_name and user_id and session_id:
+        create_session_url = f"{api_url}/apps/{app_name}/users/{user_id}/sessions/{session_id}"
+        try:
+            print(f"DEBUG: Pre-creating session at {create_session_url}")
+            request_with_retry("POST", create_session_url, json={}, timeout=5)
+        except Exception as e:
+            print(f"DEBUG: Session creation failed (might already exist): {e}")
+
+    def generate():
+        try:
+            print(f"DEBUG: Proxying to {target_url}")
+            with requests.post(target_url, json=data, stream=True, timeout=60, verify=False) as r:
+                if r.status_code == 200:
+                    for line in r.iter_lines():
+                        if line:
+                            yield line + b"\n"
+                else:
+                    error_body = r.text[:200]
+                    print(f"DEBUG: {target_url} failed with {r.status_code}: {error_body}")
+                    yield f"data: {json.dumps({'error': f'HTTP {r.status_code}: {error_body}'})}\n\n".encode()
+        except Exception as e:
+            print(f"DEBUG: Connection error: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 # Static files
 static_path = os.path.join(os.path.dirname(__file__), "static")
