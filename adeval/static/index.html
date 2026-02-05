@@ -215,6 +215,16 @@
                                         <span v-if="!isRunning">{{ testCases.length }} Cases</span>
                                         <span v-else>{{ Math.round(progress * testCases.length / 100) }} / {{ testCases.length }}</span>
                                     </h4>
+                                    <div v-if="!isRunning && evalStats.total > 0 && evalStats.pending < evalStats.total" class="flex items-center space-x-4 mt-3">
+                                        <div class="flex items-center">
+                                            <div class="w-2 h-2 rounded-full bg-emerald-400 mr-2"></div>
+                                            <span class="text-[10px] font-black uppercase tracking-wider">{{ evalStats.pass }} / {{ evalStats.total }} Pass ({{ evalStats.passRate }}%)</span>
+                                        </div>
+                                        <div class="flex items-center">
+                                            <div class="w-2 h-2 rounded-full bg-rose-400 mr-2"></div>
+                                            <span class="text-[10px] font-black uppercase tracking-wider">{{ evalStats.fail }} / {{ evalStats.total }} Fail ({{ evalStats.failRate }}%)</span>
+                                        </div>
+                                    </div>
                                 </div>
                                 <div class="flex space-x-2">
                                     <button @click="runAll" :disabled="isRunning" class="bg-white dark:bg-gray-100 text-indigo-600 p-4 rounded-xl hover:scale-105 transition active:scale-95 disabled:opacity-50 shadow-lg">
@@ -266,11 +276,11 @@
                                             <td class="px-6 py-4 align-top">
                                                 <textarea v-model="case_.expectedAnswer" @blur="saveCurrentExperiment" class="w-full bg-transparent outline-none text-indigo-600 dark:text-indigo-400 font-black resize-none p-1 transition-theme text-center" placeholder="Keyword..."></textarea>
                                             </td>
-                                            <td class="px-6 py-4 align-top text-gray-400 dark:text-gray-500 italic whitespace-pre-line leading-relaxed text-center">
+                                            <td class="px-6 py-4 align-top text-gray-400 dark:text-gray-500 italic whitespace-pre-line leading-relaxed text-center break-all">
                                                 {{ case_.actualTools || '-' }}
                                             </td>
-                                            <td class="px-6 py-4 align-top text-center text-gray-400 dark:text-gray-500 italic leading-relaxed">
-                                                <div class="w-full text-left">{{ case_.actualAnswer || '-' }}</div>
+                                            <td class="px-6 py-4 align-top text-center text-gray-400 dark:text-gray-500 italic leading-relaxed break-all">
+                                                <div class="w-full text-left whitespace-pre-line">{{ case_.actualAnswer || '-' }}</div>
                                             </td>
                                             <td class="px-6 py-4 align-top flex justify-center">
                                                 <div v-if="case_.status === 'PASS'" class="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 py-1.5 px-3 rounded-full font-black text-[9px] uppercase shadow-sm transition-theme"><i class="fas fa-check-circle mr-1"></i> PASS</div>

@@ -136,8 +136,9 @@ def run_test(req: EvalRequest):
     }
     
     try:
-        response = request_with_retry("POST", f"{req.api_url}/run", json=payload, timeout=45)
+        response = request_with_retry("POST", f"{req.api_url}/run", json=payload, timeout=120)
         if response.status_code == 200:
+            # ... (保持現有處理邏輯)
             events = response.json()
             tools_called = []
             answer_parts = []
@@ -159,9 +160,25 @@ def run_test(req: EvalRequest):
                 "answer": " ".join(answer_parts).strip(),
                 "raw_response": events
             }
-        return {"tools": "Error", "answer": f"API Error {response.status_code}", "raw_response": []}
+        
+        # 處理非 200 的錯誤情況
+        error_detail = response.text[:500] # 抓取前 500 字元避免過長
+        try:
+            # 嘗試解析 JSON 錯誤訊息
+            json_error = response.json()
+            if isinstance(json_error, dict) and "detail" in json_error:
+                error_detail = json_error["detail"]
+        except: pass
+        
+        return {
+            "tools": "Error", 
+            "answer": f"API Error {response.status_code}: {error_detail}", 
+            "raw_response": []
+        }
+    except requests.exceptions.Timeout:
+        return {"tools": "Error", "answer": "Request Timeout (Agent took too long to respond > 120s)", "raw_response": []}
     except Exception as e:
-        return {"tools": "Error", "answer": str(e), "raw_response": []}
+        return {"tools": "Error", "answer": f"Connection Error: {str(e)}", "raw_response": []}
 
 @app.post("/api/run-sse-proxy")
 async def run_sse_proxy(request: Request):

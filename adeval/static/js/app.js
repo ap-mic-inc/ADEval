@@ -26,6 +26,23 @@ createApp({
 
         const testCases = computed(() => currentExp.value ? currentExp.value.testCases : []);
 
+        const evalStats = computed(() => {
+            const cases = testCases.value;
+            const total = cases.length;
+            const pass = cases.filter(c => c.status === 'PASS').length;
+            const fail = cases.filter(c => c.status === 'FAIL').length;
+            const pending = cases.filter(c => !c.status).length;
+            
+            return {
+                total,
+                pass,
+                fail,
+                pending,
+                passRate: total > 0 ? Math.round((pass / total) * 100) : 0,
+                failRate: total > 0 ? Math.round((fail / total) * 100) : 0
+            };
+        });
+
         const updateThemeClass = (val) => {
             if (val) {
                 document.documentElement.classList.add('dark');
@@ -171,49 +188,87 @@ createApp({
 
             for (let i = 0; i < cases.length; i++) {
                 const c = cases[i];
-                try {
-                    const data = await runTestApi({
-                        app_name: c.appName, 
-                        question: c.q, 
-                        state: c.state,
-                        api_url: config.value.apiUrl,
-                        user_id: config.value.userId 
-                    });
-                    
-                    const actualToolsStr = data.tools || "None";
-                    const actualToolsList = actualToolsStr.split('\n').map(t => normalizeTool(t));
+                let success = false;
+                let retryCount = 0;
+                const maxRetries = 3;
 
-                    const expectedToolsInput = (c.expectedTools || "");
-                    const expectedToolsList = expectedToolsInput.split('\n').filter(s => s.trim());
-                    
-                    let toolPass = true;
-                    for (const et of expectedToolsList) {
-                        if (config.value.verifyArgs) {
-                            const normalizedEt = normalizeTool(et);
-                            if (!actualToolsList.includes(normalizedEt)) {
-                                toolPass = false;
-                                break;
-                            }
-                        } else {
-                            const toolNameOnly = et.split('(')[0].trim().toLowerCase();
-                            const exists = actualToolsList.some(at => at.startsWith(toolNameOnly + '(') || at === toolNameOnly);
-                            if (!exists) {
-                                toolPass = false;
-                                break;
+                while (!success && retryCount <= maxRetries) {
+                    try {
+                        if (retryCount > 0) {
+                            c.actualAnswer = `Retrying (${retryCount}/${maxRetries})...`;
+                        }
+
+                        const data = await runTestApi({
+                            app_name: c.appName, 
+                            question: c.q, 
+                            state: c.state,
+                            api_url: config.value.apiUrl,
+                            user_id: config.value.userId 
+                        });
+                        
+                        // Check if it's an API-level error that should trigger a retry
+                        if (data.tools === "Error" && retryCount < maxRetries) {
+                             throw new Error(data.answer);
+                        }
+
+                        const actualToolsStr = data.tools || "None";
+                        const actualToolsList = actualToolsStr.split('\n').map(t => normalizeTool(t));
+
+                        const expectedToolsInput = (c.expectedTools || "");
+                        
+                        // Smart split by newline or comma (ignoring commas inside parentheses)
+                        const expectedToolsList = [];
+                        let currentTool = "";
+                        let depth = 0;
+                        for (let char of expectedToolsInput) {
+                            if (char === '(') depth++;
+                            else if (char === ')') depth--;
+                            
+                            if ((char === ',' || char === '\n') && depth === 0) {
+                                if (currentTool.trim()) expectedToolsList.push(currentTool.trim());
+                                currentTool = "";
+                            } else {
+                                currentTool += char;
                             }
                         }
-                    }
-                    
-                    c.actualTools = data.tools;
-                    c.actualAnswer = data.answer;
-                    c.rawResponse = data.raw_response;
-                    c.showTrace = false;
-                    c.status = (toolPass && (c.expectedAnswer ? (data.answer || "").toLowerCase().includes(c.expectedAnswer.toLowerCase()) : true)) ? 'PASS' : 'FAIL';
-                } catch (e) { 
-                    c.status = 'FAIL'; 
-                    c.actualTools = "Error";
-                    c.actualAnswer = e.message; 
-                } 
+                        if (currentTool.trim()) expectedToolsList.push(currentTool.trim());
+                        
+                        let toolPass = true;
+                        for (const et of expectedToolsList) {
+                            if (config.value.verifyArgs) {
+                                const normalizedEt = normalizeTool(et);
+                                if (!actualToolsList.includes(normalizedEt)) {
+                                    toolPass = false;
+                                    break;
+                                }
+                            } else {
+                                const toolNameOnly = et.split('(')[0].trim().toLowerCase();
+                                const exists = actualToolsList.some(at => at.startsWith(toolNameOnly + '(') || at === toolNameOnly);
+                                if (!exists) {
+                                    toolPass = false;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        c.actualTools = data.tools;
+                        c.actualAnswer = data.answer;
+                        c.rawResponse = data.raw_response;
+                        c.showTrace = false;
+                        c.status = (toolPass && (c.expectedAnswer ? (data.answer || "").toLowerCase().includes(c.expectedAnswer.toLowerCase()) : true)) ? 'PASS' : 'FAIL';
+                        success = true;
+                    } catch (e) { 
+                        retryCount++;
+                        if (retryCount > maxRetries) {
+                            c.status = 'FAIL'; 
+                            c.actualTools = "Error";
+                            c.actualAnswer = e.message; 
+                        } else {
+                            // Wait a bit before retry (exponential backoff or simple delay)
+                            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+                        }
+                    } 
+                }
                 progress.value = Math.round(((i + 1) / cases.length) * 100);
             }
             await saveCurrentExperiment();
@@ -345,7 +400,7 @@ createApp({
         });
 
         return { 
-            tab, isDark, isFetching, saveStatus, config, apps, experiments, currentExp, testCases, single, isRunning, isComparing, progress, compare,
+            tab, isDark, isFetching, saveStatus, config, apps, experiments, currentExp, testCases, evalStats, single, isRunning, isComparing, progress, compare,
             toggleTheme, fetchApps, addCase, removeCase, runSingle, runAll, runComparison,
             handleFileUpload, exportQuestionBank, exportResults,
             createNewExperiment, loadExperiment, saveCurrentExperiment, deleteExperiment, copyTrace
