@@ -158,10 +158,10 @@ createApp({
             const cases = currentExp.value.testCases;
 
             const normalizeTool = (t) => {
-                const match = t.match(/^([^(]+)\(.*\)$/);
+                const match = t.match(/^([^(]+)\((.*)\)$/);
                 if (!match) return t.trim().toLowerCase();
                 const name = match[1].trim().toLowerCase();
-                const args = match[2].split(',')
+                const args = (match[2] || '').split(',')
                     .map(a => a.trim().toLowerCase())
                     .filter(a => a)
                     .sort()
@@ -227,8 +227,8 @@ createApp({
             reader.onload = async (ev) => {
                 const lines = ev.target.result.split('\n');
                 const newCases = lines.slice(1).filter(l => l.trim()).map(line => {
-                    const parts = line.match(/(".*?"|[^\",\s]+)(?=\s*,|\s*$)/g) || line.split(',');
-                    const clean = (s) => s ? s.replace(/^"|"$/g, '').trim() : '';
+                    const parts = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+                    const clean = (s) => s ? s.trim().replace(/^"|"$/g, '').replace(/""/g, '"').trim() : '';
                     return {
                         appName: clean(parts[0]) || apps.value[0],
                         q: clean(parts[1]) || '',
