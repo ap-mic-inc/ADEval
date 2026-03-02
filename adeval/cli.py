@@ -84,7 +84,8 @@ def inspect_exp(exp_id: str):
     typer.echo("-" * 60)
     for i, c in enumerate(exp.testCases):
         typer.echo(f"{i+1}. Q: {c.q}")
-        typer.echo(f"   Expected Tools: {c.expectedTools.replace('\n', ', ')}")
+        tools_str = c.expectedTools.replace('\n', ', ')
+        typer.echo(f"   Expected Tools: {tools_str}")
         if c.status:
             color = typer.colors.GREEN if c.status == 'PASS' else typer.colors.RED
             typer.secho(f"   Status: {c.status}", fg=color)
