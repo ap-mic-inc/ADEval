@@ -3,7 +3,8 @@ import json
 import uuid
 import requests
 import urllib3
-from typing import List, Optional, Any
+import csv
+from typing import List, Optional, Any, Dict
 from pydantic import BaseModel
 
 # --- Models ---
@@ -33,17 +34,38 @@ class EvalRequest(BaseModel):
     question: str
     state: Optional[str] = "{}"
 
+class GlobalConfig(BaseModel):
+    apiUrl: str = "http://localhost:8000"
+    userId: str = "default_user"
+    appName: str = "DefaultAgent"
+
 # --- Logic ---
 
 BASE_DIR = os.getenv("ADEVAL_DATA_DIR", os.getcwd())
 ADEVAL_DIR = os.path.join(BASE_DIR, ".adeval")
 EXP_DIR = os.path.join(ADEVAL_DIR, "experiments")
+CONFIG_FILE = os.path.join(ADEVAL_DIR, "config.json")
 
 def ensure_dirs():
     if not os.path.exists(ADEVAL_DIR):
         os.makedirs(ADEVAL_DIR)
     if not os.path.exists(EXP_DIR):
         os.makedirs(EXP_DIR)
+
+def get_config() -> GlobalConfig:
+    ensure_dirs()
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return GlobalConfig(**json.load(f))
+        except:
+            pass
+    return GlobalConfig()
+
+def save_config(config: GlobalConfig):
+    ensure_dirs()
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config.model_dump(), f, indent=4)
 
 def request_with_retry(method, url, **kwargs):
     try:
@@ -157,3 +179,55 @@ def run_single_test(req: EvalRequest):
         return {"tools": "Error", "answer": "Request Timeout", "raw_response": []}
     except Exception as e:
         return {"tools": "Error", "answer": f"Connection Error: {str(e)}", "raw_response": []}
+
+def import_csv(file_path: str, name: str, api_url: str, user_id: str, app_name: str) -> Experiment:
+    test_cases = []
+    with open(file_path, mode='r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Flexible mapping for column names
+            q = row.get('Question') or row.get('q') or row.get('question')
+            expected_tools = row.get('Expected Tools') or row.get('expectedTools') or row.get('tools', "")
+            expected_answer = row.get('Expected Answer') or row.get('expectedAnswer') or row.get('answer', "")
+            target_app = row.get('App Name') or row.get('appName') or app_name
+            
+            if q:
+                test_cases.append(TestCase(
+                    appName=target_app,
+                    q=q,
+                    expectedTools=expected_tools,
+                    expectedAnswer=expected_answer,
+                    state="{}"
+                ))
+    
+    exp = Experiment(
+        id='exp_' + uuid.uuid4().hex[:9],
+        name=name,
+        userId=user_id,
+        apiUrl=api_url,
+        testCases=test_cases
+    )
+    save_experiment_data(exp)
+    return exp
+
+def export_to_csv(exp: Experiment, output_path: str):
+    fieldnames = ['Question', 'Expected Tools', 'Actual Tools', 'Expected Answer', 'Actual Answer', 'Status', 'App Name']
+    with open(output_path, mode='w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for c in exp.testCases:
+            # Simple tools match logic for export status
+            expected_tools_list = set([t.strip() for t in c.expectedTools.split("\n") if t.strip()])
+            actual_tools_list = set([t.strip() for t in (c.actualTools or "").split("\n") if t.strip()])
+            status = "PASS" if expected_tools_list == actual_tools_list else "FAIL"
+            if not c.actualTools: status = "PENDING"
+
+            writer.writerow({
+                'Question': c.q,
+                'Expected Tools': c.expectedTools,
+                'Actual Tools': c.actualTools or "",
+                'Expected Answer': c.expectedAnswer,
+                'Actual Answer': c.actualAnswer or "",
+                'Status': status,
+                'App Name': c.appName
+            })

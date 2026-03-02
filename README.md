@@ -2,7 +2,7 @@
 
 [English Version](README.md) | [繁體中文版](README_zhtw.md)
 
-ADEval is an evaluation tool designed specifically for developers using the Google Agent Development Kit (ADK). It provides an intuitive Web UI that allows you to systematically test your Agent's **Q-Tools-A (Question -> Tools -> Answer)** flow, supporting experiment management, batch testing, and comprehensive tracing.
+ADEval is an evaluation tool designed specifically for developers using the Google Agent Development Kit (ADK). It provides an intuitive **Web UI** and a powerful **CLI** that allow you to systematically test your Agent's **Q-Tools-A (Question -> Tools -> Answer)** flow, supporting experiment management, batch testing, and comprehensive tracing.
 
 **GitHub Repository:** [https://github.com/ap-mic-inc/ADEval](https://github.com/ap-mic-inc/ADEval)  
 **Detailed Documentation:** [docs/index.md](docs/index.md)
@@ -13,6 +13,7 @@ ADEval is an evaluation tool designed specifically for developers using the Goog
 ## 🌟 Key Features
 
 - **Designed for Google ADK**: Fully compatible with ADK's `/run` and `/list-apps` API specifications.
+- **Dual Mode Support (New in v0.2.0)**: Seamlessly switch between **Visual Web UI** and **Headless CLI** for different development stages.
 - **Experiment Management**:
   - Support for multiple independent experiments, with data automatically saved in the local `.adeval/` folder.
   - Complete records of experiment names, User ID, Agent API URL, and all test cases.
@@ -22,10 +23,6 @@ ADEval is an evaluation tool designed specifically for developers using the Goog
   - **Answer (A)**: Keyword matching to ensure Agent responses meet expectations.
 - **Visual Tracing**:
   - One-click expansion of raw API responses, displaying the full JSON event stream in a dark terminal-style view.
-- **Efficient Batch Processing**:
-  - Support for importing test cases from CSV files.
-  - Export "Question Bank backups" or "Test Result reports."
-  - Real-time progress bar and completion statistics.
 - **Modern Interface**:
   - Support for **Dark / Light Mode** switching.
   - High-quality responsive UI built with Vue.js 3 and Tailwind CSS.
@@ -41,28 +38,28 @@ cd ADEval
 pip install -e .
 ```
 
-### 2. Launch UI
+### 2. CLI Usage (Powerful & Headless)
+ADEval v0.2.0 introduces a comprehensive CLI for automation and CI/CD:
+
+- **Configure Defaults**: `adeval config --url "http://localhost:8000" --user "tester"`
+- **Quick Test**: `adeval test "What's the weather today?"`
+- **Import CSV**: `adeval import my_cases.csv --name "Regression_Test"`
+- **Run & Export**: `adeval run <EXP_ID>` and then `adeval export <EXP_ID> -o results.csv`
+- **Inspect**: `adeval inspect <EXP_ID>` to preview cases in terminal.
+
+### 3. Launch Web UI
 Run the following command to start the evaluation interface:
 
 ```bash
 adeval ui
 ```
-The default URL is: `http://127.0.0.1:8080`
-
-### 3. Advanced Parameters
-You can customize the Port or Host:
-
-```bash
-adeval ui --port 8081 --host 0.0.0.0
-```
+The default URL is: `http://127.0.0.1:8080`. You can customize the port via `--port 8081`.
 
 ## 🐳 Docker Deployment
 
 If you prefer using Docker, use the following commands to build and run:
 
 ### 1. Build Docker Image
-Run this in the project directory:
-
 ```bash
 docker build -t adeval:latest .
 ```
@@ -84,16 +81,15 @@ All experiment data is stored in the `.adeval` folder under your execution direc
 
 ```text
 .adeval/
-└── experiments/
-    ├── exp_xxxxxx.json    # Experiment data (UTF-8 JSON)
-    └── ...
+├── experiments/    # Experiment JSON files (UTF-8)
+└── config.json     # Global CLI configurations
 ```
 
 ## 🛠️ Tech Stack
 
-- **Backend**: FastAPI (Python) - Handles API proxying, static file hosting, and data persistence.
-- **Frontend**: Vue.js 3 + Tailwind CSS - Responsive Single Page Application (SPA).
-- **CLI**: Typer - Simple and easy-to-use command-line tool.
+- **Backend**: FastAPI (Python) - Handles API proxying and data persistence.
+- **Frontend**: Vue.js 3 + Tailwind CSS - Responsive SPA.
+- **CLI**: Typer + Rich - Modern command-line interface.
 
 ## VIII. About the Author
 
