@@ -185,7 +185,6 @@ def import_csv(file_path: str, name: str, api_url: str, user_id: str, app_name: 
     with open(file_path, mode='r', encoding='utf-8-sig') as f:
         reader = csv.DictReader(f)
         for row in reader:
-            # Flexible mapping for column names
             q = row.get('Question') or row.get('q') or row.get('question')
             expected_tools = row.get('Expected Tools') or row.get('expectedTools') or row.get('tools', "")
             expected_answer = row.get('Expected Answer') or row.get('expectedAnswer') or row.get('answer', "")
@@ -216,18 +215,52 @@ def export_to_csv(exp: Experiment, output_path: str):
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for c in exp.testCases:
-            # Simple tools match logic for export status
-            expected_tools_list = set([t.strip() for t in c.expectedTools.split("\n") if t.strip()])
-            actual_tools_list = set([t.strip() for t in (c.actualTools or "").split("\n") if t.strip()])
-            status = "PASS" if expected_tools_list == actual_tools_list else "FAIL"
-            if not c.actualTools: status = "PENDING"
-
             writer.writerow({
                 'Question': c.q,
                 'Expected Tools': c.expectedTools,
                 'Actual Tools': c.actualTools or "",
                 'Expected Answer': c.expectedAnswer,
                 'Actual Answer': c.actualAnswer or "",
-                'Status': status,
+                'Status': c.status or "PENDING",
                 'App Name': c.appName
             })
+
+def normalize_tool(tool_str: str) -> str:
+    """
+    Normalize a tool call string for comparison.
+    Example: 'Add(b=1, a=2)' -> 'add(a=1, b=2)'
+    """
+    tool_str = tool_str.strip()
+    if "(" not in tool_str:
+        return tool_str.lower()
+    
+    name_part, arg_part = tool_str.split("(", 1)
+    name = name_part.strip().lower()
+    
+    # Clean up arguments
+    args_content = arg_part.replace(")", "").strip()
+    if not args_content:
+        return name
+    
+    # Split by comma
+    args = [a.strip().lower() for a in args_content.split(",") if a.strip()]
+    args.sort()
+    
+    return f"{name}({', '.join(args)})"
+
+def compare_tools(expected_str: str, actual_str: str, verify_args: bool = True) -> bool:
+    """
+    Compare two sets of tool calls.
+    """
+    expected_list = [t.strip() for t in expected_str.split("\n") if t.strip()]
+    actual_list = [t.strip() for t in actual_str.split("\n") if t.strip()]
+    
+    if not verify_args:
+        exp_names = {t.split("(")[0].strip().lower() for t in expected_list}
+        act_names = {t.split("(")[0].strip().lower() for t in actual_list}
+        return exp_names == act_names
+    
+    exp_normalized = {normalize_tool(t) for t in expected_list}
+    act_normalized = {normalize_tool(t) for t in actual_list}
+    
+    return exp_normalized == act_normalized

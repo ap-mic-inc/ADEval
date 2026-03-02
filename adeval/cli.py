@@ -7,7 +7,8 @@ from .server import app
 from .core import (
     BASE_DIR, list_experiments, get_experiment, run_single_test, 
     delete_experiment_data, EvalRequest, save_experiment_data,
-    get_config, save_config, import_csv, export_to_csv, GlobalConfig
+    get_config, save_config, import_csv, export_to_csv, GlobalConfig,
+    compare_tools
 )
 
 # Create the Typer app
@@ -162,7 +163,8 @@ def quick_test(
 @cli.command(name="run")
 def run_exp(
     exp_id: str = typer.Argument(..., help="The ID of the experiment to run"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full raw response on failure")
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full raw response on failure"),
+    verify_args: bool = typer.Option(True, "--verify-args/--no-verify-args", help="Whether to verify tool arguments")
 ):
     """
     ▶️  [bold yellow]Run a specific experiment by ID.[/bold yellow]
@@ -191,18 +193,17 @@ def run_exp(
         case.actualAnswer = result.get("answer", "")
         case.rawResponse = result.get("raw_response")
         
-        expected_tools = [t.strip() for t in case.expectedTools.split("\n") if t.strip()]
-        actual_tools_list = [t.strip() for t in case.actualTools.split("\n") if t.strip()]
+        # Use the new compare_tools logic
+        tools_match = compare_tools(case.expectedTools, case.actualTools, verify_args=verify_args)
         
-        tools_match = set(expected_tools) == set(actual_tools_list)
         if tools_match:
             typer.secho("  ✅ Tools Match", fg=typer.colors.GREEN)
             passed += 1
             case.status = 'PASS'
         else:
             typer.secho(f"  ❌ Tools Mismatch", fg=typer.colors.RED)
-            typer.echo(f"     Expected: {expected_tools}")
-            typer.echo(f"     Actual:   {actual_tools_list}")
+            typer.echo(f"     Expected: {case.expectedTools.splitlines()}")
+            typer.echo(f"     Actual:   {case.actualTools.splitlines()}")
             case.status = 'FAIL'
         
         typer.echo(f"  A: {case.actualAnswer[:100]}..." if len(case.actualAnswer) > 100 else f"  A: {case.actualAnswer}")
