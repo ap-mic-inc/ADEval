@@ -27,6 +27,33 @@ ADEval 是一款專為使用 Google Agent Development Kit (ADK) 的開發者設�
   - 支持 **深色 / 淺色模式** 切換。
   - 使用 Vue.js 3 與 Tailwind CSS 構建的高品質響應式 UI。
 
+## 🔄 使用邏輯工作流
+
+ADEval 提供流暢的工作流程，協助您從定義測試案例到產出詳細的評測報告。
+
+```mermaid
+flowchart TD
+    Start([開始]) --> Config[<b>adeval config</b><br/>設定預設 API 與 User ID]
+    Config --> Mode{選擇模式}
+    
+    Mode -- "CLI 工作流" --> Import[<b>adeval import</b><br/>從 CSV 載入測試案例]
+    Mode -- "Web UI 工作流" --> CreateUI[<b>Web 控制台</b><br/>視覺化建立實驗]
+    
+    Import --> Inspect[<b>adeval inspect</b><br/>預覽案例與預期結果]
+    CreateUI --> Inspect
+    
+    Inspect --> Exec{執行測試}
+    
+    Exec -- "批次執行" --> Run[<b>adeval run</b><br/>完整評測並產出統計]
+    Exec -- "快速測試" --> Test[<b>adeval test</b><br/>單一問句即時驗證]
+    
+    Run --> Review[檢視結果]
+    Test --> Review
+    
+    Review -- "報告" --> Export[<b>adeval export</b><br/>匯出 CSV 結果報告]
+    Review -- "除錯" --> Trace[<b>視覺化 Trace</b><br/>檢查原始 JSON 事件流]
+```
+
 ## 🚀 快速上手
 
 ### 1. 安裝

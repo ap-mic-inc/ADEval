@@ -27,6 +27,33 @@ ADEval is an evaluation tool designed specifically for developers using the Goog
   - Support for **Dark / Light Mode** switching.
   - High-quality responsive UI built with Vue.js 3 and Tailwind CSS.
 
+## 🔄 Workflow Logic
+
+ADEval follows a streamlined process to help you move from test case definition to detailed evaluation reports.
+
+```mermaid
+flowchart TD
+    Start([Start]) --> Config[<b>adeval config</b><br/>Set default API URL & User ID]
+    Config --> Mode{Select Mode}
+    
+    Mode -- "CLI Workflow" --> Import[<b>adeval import</b><br/>Load test cases from CSV]
+    Mode -- "Web UI Workflow" --> CreateUI[<b>Web Dashboard</b><br/>Create experiments visually]
+    
+    Import --> Inspect[<b>adeval inspect</b><br/>Preview cases & expectations]
+    CreateUI --> Inspect
+    
+    Inspect --> Exec{Execute Test}
+    
+    Exec -- "Batch Run" --> Run[<b>adeval run</b><br/>Evaluate all cases with stats]
+    Exec -- "Quick Test" --> Test[<b>adeval test</b><br/>Single prompt validation]
+    
+    Run --> Review[Review Results]
+    Test --> Review
+    
+    Review -- "Report" --> Export[<b>adeval export</b><br/>Generate CSV results report]
+    Review -- "Debug" --> Trace[<b>Visual Tracing</b><br/>Inspect raw JSON event stream]
+```
+
 ## 🚀 Quick Start
 
 ### 1. Installation
