@@ -55,4 +55,4 @@ After installation, run the following command to verify it's working:
 ```bash
 adeval --help
 ```
-You should see a list of available commands, including `ui`.
+You should see a list of available commands, including `ui`, `config`, `list`, `run`, `test`, and more.

@@ -55,4 +55,4 @@ ADEval 可以透過 `pip` 在本地安裝，或透過 `Docker` 進行部署。
 ```bash
 adeval --help
 ```
-你應該會看到可用指令的列表，包含 `ui`。
+你應該會看到可用指令的列表，包含 `ui`, `config`, `list`, `run`, `test` 等等。
