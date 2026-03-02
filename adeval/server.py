@@ -1,104 +1,33 @@
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
 import requests
-import uuid
 import os
 import json
-import urllib3
-from typing import List, Optional, Any
+from .core import (
+    Experiment, EvalRequest, list_experiments, save_experiment_data, 
+    delete_experiment_data, run_single_test, request_with_retry, 
+    BASE_DIR, ensure_dirs
+)
 
 app = FastAPI(title="ADEval Server")
 
-def request_with_retry(method, url, **kwargs):
-    """
-    Perform an HTTP request with automatic SSL verification retry.
-    If it fails due to SSL certificate verification, it retries with verify=False.
-    """
-    try:
-        return requests.request(method, url, **kwargs)
-    except requests.exceptions.SSLError:
-        # Suppress insecure request warnings only when we actually skip verification
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        kwargs["verify"] = False
-        return requests.request(method, url, **kwargs)
-    except Exception as e:
-        raise e
-
-# Data Directory Management
-BASE_DIR = os.getenv("ADEVAL_DATA_DIR", os.getcwd())
-ADEVAL_DIR = os.path.join(BASE_DIR, ".adeval")
-EXP_DIR = os.path.join(ADEVAL_DIR, "experiments")
-
-def ensure_dirs():
-    if not os.path.exists(ADEVAL_DIR):
-        os.makedirs(ADEVAL_DIR)
-    if not os.path.exists(EXP_DIR):
-        os.makedirs(EXP_DIR)
-
-ensure_dirs()
-
-class TestCase(BaseModel):
-    appName: str
-    q: str
-    expectedTools: Optional[str] = ""
-    expectedAnswer: Optional[str] = ""
-    state: Optional[str] = "{}"
-    status: Optional[str] = None
-    actualTools: Optional[str] = None
-    actualAnswer: Optional[str] = None
-    rawResponse: Optional[List[Any]] = None
-
-class Experiment(BaseModel):
-    id: str
-    name: str
-    userId: str
-    apiUrl: str
-    testCases: List[TestCase]
-
-class EvalRequest(BaseModel):
-    app_name: str
-    api_url: str
-    user_id: str
-    question: str
-    state: Optional[str] = "{}"
-
 @app.get("/api/experiments")
-def list_experiments():
-    ensure_dirs()
-    exps = []
-    if os.path.exists(EXP_DIR):
-        for f in os.listdir(EXP_DIR):
-            if f.endswith(".json"):
-                try:
-                    with open(os.path.join(EXP_DIR, f), "r", encoding="utf-8") as file:
-                        exps.append(json.load(file))
-                except Exception as e:
-                    print(f"Failed to read {f}: {e}")
-    return exps
+def get_experiments():
+    return list_experiments()
 
 @app.post("/api/experiments")
 def save_experiment(exp: Experiment):
-    ensure_dirs()
-    file_path = os.path.join(EXP_DIR, f"{exp.id}.json")
     try:
-        # Explicitly convert to dict and dump with ensure_ascii=False
-        data = exp.model_dump() if hasattr(exp, "model_dump") else exp.dict()
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-        print(f"Saved experiment {exp.id} successfully.")
+        save_experiment_data(exp)
         return {"status": "ok"}
     except Exception as e:
-        print(f"Save error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/experiments/{exp_id}")
 def delete_experiment(exp_id: str):
-    file_path = os.path.join(EXP_DIR, f"{exp_id}.json")
-    if os.path.exists(file_path):
-        os.remove(file_path)
+    if delete_experiment_data(exp_id):
         return {"status": "deleted"}
     raise HTTPException(status_code=404, detail="Not found")
 
@@ -113,72 +42,7 @@ def list_apps(api_url: str):
 
 @app.post("/api/run-test")
 def run_test(req: EvalRequest):
-    session_id = f"eval-{uuid.uuid4().hex[:8]}"
-    
-    # Parse state JSON string
-    try:
-        state_obj = json.loads(req.state) if req.state else {}
-    except:
-        state_obj = {}
-
-    # 1. Create Session with State
-    create_url = f"{req.api_url}/apps/{req.app_name}/users/{req.user_id}/sessions/{session_id}"
-    try:
-        request_with_retry("POST", create_url, json=state_obj, timeout=10)
-    except: pass
-
-    payload = {
-        "appName": req.app_name,
-        "userId": req.user_id,
-        "sessionId": session_id,
-        "newMessage": {"role": "user", "parts": [{"text": req.question}]},
-        "streaming": False
-    }
-    
-    try:
-        response = request_with_retry("POST", f"{req.api_url}/run", json=payload, timeout=120)
-        if response.status_code == 200:
-            # ... (保持現有處理邏輯)
-            events = response.json()
-            tools_called = []
-            answer_parts = []
-            for event in events:
-                content = event.get("content")
-                if content and "parts" in content:
-                    for part in content["parts"]:
-                        if "functionCall" in part:
-                            fcall = part["functionCall"]
-                            name = fcall.get("name", "unknown")
-                            args = fcall.get("args", {})
-                            arg_str = ", ".join([f"{k}={v}" for k, v in args.items()])
-                            tools_called.append(f"{name}({arg_str})")
-                        if "text" in part and event.get("author") != "user":
-                            answer_parts.append(part["text"])
-            
-            return {
-                "tools": "\n".join(tools_called) if tools_called else "None",
-                "answer": " ".join(answer_parts).strip(),
-                "raw_response": events
-            }
-        
-        # 處理非 200 的錯誤情況
-        error_detail = response.text[:500] # 抓取前 500 字元避免過長
-        try:
-            # 嘗試解析 JSON 錯誤訊息
-            json_error = response.json()
-            if isinstance(json_error, dict) and "detail" in json_error:
-                error_detail = json_error["detail"]
-        except: pass
-        
-        return {
-            "tools": "Error", 
-            "answer": f"API Error {response.status_code}: {error_detail}", 
-            "raw_response": []
-        }
-    except requests.exceptions.Timeout:
-        return {"tools": "Error", "answer": "Request Timeout (Agent took too long to respond > 120s)", "raw_response": []}
-    except Exception as e:
-        return {"tools": "Error", "answer": f"Connection Error: {str(e)}", "raw_response": []}
+    return run_single_test(req)
 
 @app.post("/api/run-sse-proxy")
 async def run_sse_proxy(request: Request):
@@ -188,21 +52,16 @@ async def run_sse_proxy(request: Request):
     user_id = data.get("userId")
     session_id = data.get("sessionId")
     
-    # 1. 核心路徑固定為 /run_sse
     target_url = f"{api_url}/run_sse"
 
-    # 2. 自動前置處理：建立 Session
     if app_name and user_id and session_id:
         create_session_url = f"{api_url}/apps/{app_name}/users/{user_id}/sessions/{session_id}"
         try:
-            print(f"DEBUG: Pre-creating session at {create_session_url}")
             request_with_retry("POST", create_session_url, json={}, timeout=5)
-        except Exception as e:
-            print(f"DEBUG: Session creation failed (might already exist): {e}")
+        except: pass
 
     def generate():
         try:
-            print(f"DEBUG: Proxying to {target_url}")
             with requests.post(target_url, json=data, stream=True, timeout=60, verify=False) as r:
                 if r.status_code == 200:
                     for line in r.iter_lines():
@@ -210,10 +69,8 @@ async def run_sse_proxy(request: Request):
                             yield line + b"\n"
                 else:
                     error_body = r.text[:200]
-                    print(f"DEBUG: {target_url} failed with {r.status_code}: {error_body}")
                     yield f"data: {json.dumps({'error': f'HTTP {r.status_code}: {error_body}'})}\n\n".encode()
         except Exception as e:
-            print(f"DEBUG: Connection error: {e}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -221,3 +78,5 @@ async def run_sse_proxy(request: Request):
 # Static files
 static_path = os.path.join(os.path.dirname(__file__), "static")
 app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
+
+ensure_dirs()

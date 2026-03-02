@@ -3,6 +3,7 @@ const { createApp, ref, onMounted, computed, watch } = Vue;
 createApp({
     setup() {
         const tab = ref('single');
+        const isSidebarOpen = ref(true);
         const isDark = ref(localStorage.getItem('theme') === 'dark');
         const isFetching = ref(false);
         const saveStatus = ref('synced'); // 'synced', 'saving', 'error'
@@ -57,6 +58,11 @@ createApp({
             updateThemeClass(isDark.value);
         };
 
+        const toggleSidebar = () => {
+            isSidebarOpen.value = !isSidebarOpen.value;
+            console.log('Sidebar toggled:', isSidebarOpen.value);
+        };
+
         const fetchExperiments = async () => {
             try {
                 const data = await fetchExperimentsApi();
@@ -70,18 +76,23 @@ createApp({
         };
 
         const createNewExperiment = async () => {
-            const newExp = {
-                id: 'exp_' + Math.random().toString(36).substr(2, 9),
-                name: 'New Experiment ' + (experiments.value.length + 1),
-                userId: config.value.userId,
-                apiUrl: config.value.apiUrl,
-                testCases: [
-                    { appName: apps.value[0] || 'MathAgent', q: '1+1=?', state: '{}', expectedTools: 'add', expectedAnswer: '2', status: null, rawResponse: null }
-                ]
-            };
-            await saveExperimentApi(newExp);
-            await fetchExperiments();
-            loadExperiment(newExp);
+            try {
+                const newExp = {
+                    id: 'exp_' + Math.random().toString(36).substr(2, 9),
+                    name: 'New Experiment ' + (experiments.value.length + 1),
+                    userId: config.value.userId,
+                    apiUrl: config.value.apiUrl,
+                    testCases: [
+                        { appName: apps.value[0] || 'MathAgent', q: '1+1=?', state: '{}', expectedTools: 'add', expectedAnswer: '2', status: null, rawResponse: null }
+                    ]
+                };
+                await saveExperimentApi(newExp);
+                await fetchExperiments();
+                loadExperiment(newExp);
+            } catch (e) {
+                console.error("Failed to create experiment", e);
+                alert("Failed to create experiment. Please check if the server is running.");
+            }
         };
 
         const loadExperiment = (exp) => {
@@ -91,7 +102,6 @@ createApp({
             single.value.appName = exp.testCases[0]?.appName || apps.value[0];
             single.value.state = '{}';
             
-            // Set default compare agents
             if (apps.value.length >= 2) {
                 compare.value.agent1 = apps.value[0];
                 compare.value.agent2 = apps.value[1];
@@ -186,93 +196,94 @@ createApp({
                 return `${name}(${args})`;
             };
 
-            for (let i = 0; i < cases.length; i++) {
-                const c = cases[i];
-                let success = false;
-                let retryCount = 0;
-                const maxRetries = 3;
+            try {
+                for (let i = 0; i < cases.length; i++) {
+                    const c = cases[i];
+                    let success = false;
+                    let retryCount = 0;
+                    const maxRetries = 3;
 
-                while (!success && retryCount <= maxRetries) {
-                    try {
-                        if (retryCount > 0) {
-                            c.actualAnswer = `Retrying (${retryCount}/${maxRetries})...`;
-                        }
+                    while (!success && retryCount <= maxRetries) {
+                        try {
+                            if (retryCount > 0) {
+                                c.actualAnswer = `Retrying (${retryCount}/${maxRetries})...`;
+                            }
 
-                        const data = await runTestApi({
-                            app_name: c.appName, 
-                            question: c.q, 
-                            state: c.state,
-                            api_url: config.value.apiUrl,
-                            user_id: config.value.userId 
-                        });
-                        
-                        // Check if it's an API-level error that should trigger a retry
-                        if (data.tools === "Error" && retryCount < maxRetries) {
-                             throw new Error(data.answer);
-                        }
-
-                        const actualToolsStr = data.tools || "None";
-                        const actualToolsList = actualToolsStr.split('\n').map(t => normalizeTool(t));
-
-                        const expectedToolsInput = (c.expectedTools || "");
-                        
-                        // Smart split by newline or comma (ignoring commas inside parentheses)
-                        const expectedToolsList = [];
-                        let currentTool = "";
-                        let depth = 0;
-                        for (let char of expectedToolsInput) {
-                            if (char === '(') depth++;
-                            else if (char === ')') depth--;
+                            const data = await runTestApi({
+                                app_name: c.appName, 
+                                question: c.q, 
+                                state: c.state,
+                                api_url: config.value.apiUrl,
+                                user_id: config.value.userId 
+                            });
                             
-                            if ((char === ',' || char === '\n') && depth === 0) {
-                                if (currentTool.trim()) expectedToolsList.push(currentTool.trim());
-                                currentTool = "";
-                            } else {
-                                currentTool += char;
+                            if (data.tools === "Error" && retryCount < maxRetries) {
+                                throw new Error(data.answer);
                             }
-                        }
-                        if (currentTool.trim()) expectedToolsList.push(currentTool.trim());
-                        
-                        let toolPass = true;
-                        for (const et of expectedToolsList) {
-                            if (config.value.verifyArgs) {
-                                const normalizedEt = normalizeTool(et);
-                                if (!actualToolsList.includes(normalizedEt)) {
-                                    toolPass = false;
-                                    break;
-                                }
-                            } else {
-                                const toolNameOnly = et.split('(')[0].trim().toLowerCase();
-                                const exists = actualToolsList.some(at => at.startsWith(toolNameOnly + '(') || at === toolNameOnly);
-                                if (!exists) {
-                                    toolPass = false;
-                                    break;
+
+                            const actualToolsStr = data.tools || "None";
+                            const actualToolsList = actualToolsStr.split('\n').map(t => normalizeTool(t));
+
+                            const expectedToolsInput = (c.expectedTools || "");
+                            const expectedToolsList = [];
+                            let currentTool = "";
+                            let depth = 0;
+                            for (let char of expectedToolsInput) {
+                                if (char === '(') depth++;
+                                else if (char === ')') depth--;
+                                
+                                if ((char === ',' || char === '\n') && depth === 0) {
+                                    if (currentTool.trim()) expectedToolsList.push(currentTool.trim());
+                                    currentTool = "";
+                                } else {
+                                    currentTool += char;
                                 }
                             }
-                        }
-                        
-                        c.actualTools = data.tools;
-                        c.actualAnswer = data.answer;
-                        c.rawResponse = data.raw_response;
-                        c.showTrace = false;
-                        c.status = (toolPass && (c.expectedAnswer ? (data.answer || "").toLowerCase().includes(c.expectedAnswer.toLowerCase()) : true)) ? 'PASS' : 'FAIL';
-                        success = true;
-                    } catch (e) { 
-                        retryCount++;
-                        if (retryCount > maxRetries) {
-                            c.status = 'FAIL'; 
-                            c.actualTools = "Error";
-                            c.actualAnswer = e.message; 
-                        } else {
-                            // Wait a bit before retry (exponential backoff or simple delay)
-                            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-                        }
-                    } 
+                            if (currentTool.trim()) expectedToolsList.push(currentTool.trim());
+                            
+                            let toolPass = true;
+                            for (const et of expectedToolsList) {
+                                if (config.value.verifyArgs) {
+                                    const normalizedEt = normalizeTool(et);
+                                    if (!actualToolsList.includes(normalizedEt)) {
+                                        toolPass = false;
+                                        break;
+                                    }
+                                } else {
+                                    const toolNameOnly = et.split('(')[0].trim().toLowerCase();
+                                    const exists = actualToolsList.some(at => at.startsWith(toolNameOnly + '(') || at === toolNameOnly);
+                                    if (!exists) {
+                                        toolPass = false;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            c.actualTools = data.tools;
+                            c.actualAnswer = data.answer;
+                            c.rawResponse = data.raw_response;
+                            c.showTrace = false;
+                            c.status = (toolPass && (c.expectedAnswer ? (data.answer || "").toLowerCase().includes(c.expectedAnswer.toLowerCase()) : true)) ? 'PASS' : 'FAIL';
+                            success = true;
+                        } catch (e) { 
+                            retryCount++;
+                            if (retryCount > maxRetries) {
+                                c.status = 'FAIL'; 
+                                c.actualTools = "Error";
+                                c.actualAnswer = e.message; 
+                            } else {
+                                await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+                            }
+                        } 
+                    }
+                    progress.value = Math.round(((i + 1) / cases.length) * 100);
+                    await saveCurrentExperiment();
                 }
-                progress.value = Math.round(((i + 1) / cases.length) * 100);
+            } catch (err) {
+                console.error("Batch execution interrupted", err);
+            } finally {
+                isRunning.value = false;
             }
-            await saveCurrentExperiment();
-            isRunning.value = false;
         };
 
         const handleFileUpload = (e) => {
@@ -358,7 +369,6 @@ createApp({
                         return;
                     }
 
-                    // 填充事件列表以供 UI 渲染
                     compare.value[eventsKey] = data.raw_response.map(event => {
                         if (event.content && event.content.parts) {
                             event.content.parts = event.content.parts.map(part => {
@@ -371,7 +381,6 @@ createApp({
                         return event;
                     });
                     
-                    // 從 raw_response 中找最後一個包含 usageMetadata 的事件
                     const lastEvent = [...data.raw_response].reverse().find(e => e.usageMetadata);
                     if (lastEvent) {
                         compare.value[usageKey] = lastEvent.usageMetadata;
@@ -382,7 +391,6 @@ createApp({
                 }
             };
 
-            // 並行執行兩個 Agent
             await Promise.all([
                 runAgent(compare.value.agent1, 'events1', 'usage1'),
                 runAgent(compare.value.agent2, 'events2', 'usage2')
@@ -400,8 +408,8 @@ createApp({
         });
 
         return { 
-            tab, isDark, isFetching, saveStatus, config, apps, experiments, currentExp, testCases, evalStats, single, isRunning, isComparing, progress, compare,
-            toggleTheme, fetchApps, addCase, removeCase, runSingle, runAll, runComparison,
+            tab, isSidebarOpen, isDark, isFetching, saveStatus, config, apps, experiments, currentExp, testCases, evalStats, single, isRunning, isComparing, progress, compare,
+            toggleTheme, toggleSidebar, fetchApps, addCase, removeCase, runSingle, runAll, runComparison,
             handleFileUpload, exportQuestionBank, exportResults,
             createNewExperiment, loadExperiment, saveCurrentExperiment, deleteExperiment, copyTrace
         };
