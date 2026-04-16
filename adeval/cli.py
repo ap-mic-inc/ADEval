@@ -8,7 +8,7 @@ from .core import (
     BASE_DIR, list_experiments, get_experiment, run_single_test, 
     delete_experiment_data, EvalRequest, save_experiment_data,
     get_config, save_config, import_csv, export_to_csv, GlobalConfig,
-    compare_tools
+    compare_tools, fetch_mcp_context, generate_test_cases, Experiment, uuid
 )
 
 # Create the Typer app
@@ -218,6 +218,64 @@ def run_exp(
     pass_rate = (passed / total) * 100 if total > 0 else 0
     typer.secho(f"Pass Rate: {pass_rate:.2f}%", bold=True, reverse=True)
     typer.echo("=" * 60)
+
+@cli.command(name="gendata")
+def gendata(
+    mcp: str = typer.Option(None, "--mcp", "-m", help="URL of an MCP server to fetch tools from"),
+    num: int = typer.Option(5, "--num", "-n", help="Number of test cases to generate"),
+    name: str = typer.Option(None, "--name", help="Name of the experiment"),
+    app: str = typer.Option(None, "--app", help="Target App Name for the experiment"),
+    model: str = typer.Option("gemini-3-flash-preview", "--model", help="Gemini model to use for generation"),
+    lang: str = typer.Option("zh-tw", "--lang", help="Language for generated questions (e.g., zh-tw, en)"),
+    desc: str = typer.Option(None, "--desc", "--description", help="Additional description or instructions for generation"),
+    tools: int = typer.Option(None, "--tools", help="Target number of tool calls per test case"),
+    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key")
+):
+    """
+    🧠 [bold magenta]Generate test data using Gemini.[/bold magenta]
+    Based on an MCP server tools.
+    """
+    if not mcp:
+        typer.secho("❌ Error: You must provide --mcp as a basis for generation.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    
+    if not api_key:
+        typer.secho("❌ Error: GEMINI_API_KEY is not set. Use --key or set the environment variable.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    typer.echo(f"🌐 Fetching tools from MCP: {mcp}...")
+    context = fetch_mcp_context(mcp)
+    
+    if context.startswith("Error") or context.startswith("Failed"):
+        typer.secho(f"❌ Failed to fetch tools from MCP: {context}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    typer.secho(f"🤖 Generating {num} test cases via Gemini ({model}, lang: {lang}, tools: {tools or 'auto'})...", fg=typer.colors.CYAN)
+    
+    config = get_config()
+    target_app = app or config.appName
+    
+    try:
+        test_cases = generate_test_cases(context, num, api_key, model=model, lang=lang, description=desc, num_tools=tools)
+        for tc in test_cases:
+            tc.appName = target_app
+        
+        exp_name = name or f"Generated from MCP"
+        exp = Experiment(
+            id='exp_' + uuid.uuid4().hex[:9],
+            name=exp_name,
+            userId=config.userId,
+            apiUrl=config.apiUrl,
+            testCases=test_cases
+        )
+        
+        save_experiment_data(exp)
+        typer.secho(f"✅ Successfully generated experiment: {exp.name} ({exp.id})", fg=typer.colors.GREEN, bold=True)
+        typer.echo(f"   Total test cases: {len(test_cases)}")
+        
+    except Exception as e:
+        typer.secho(f"❌ Generation failed: {str(e)}", fg=typer.colors.RED)
+        raise typer.Exit(1)
 
 @cli.command(name="delete")
 def delete_exp(exp_id: str):
