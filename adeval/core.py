@@ -19,6 +19,8 @@ class TestCase(BaseModel):
     actualTools: Optional[str] = None
     actualAnswer: Optional[str] = None
     rawResponse: Optional[List[Any]] = None
+    judgeScore: Optional[int] = None
+    judgeExplanation: Optional[str] = None
 
 class Experiment(BaseModel):
     id: str
@@ -231,7 +233,7 @@ def import_csv(file_path: str, name: str, api_url: str, user_id: str, app_name: 
     return exp
 
 def export_to_csv(exp: Experiment, output_path: str):
-    fieldnames = ['Question', 'Expected Tools', 'Actual Tools', 'Expected Answer', 'Actual Answer', 'Status', 'App Name']
+    fieldnames = ['Question', 'Expected Tools', 'Actual Tools', 'Expected Answer', 'Actual Answer', 'Status', 'App Name', 'Judge Score', 'Judge Explanation']
     with open(output_path, mode='w', encoding='utf-8-sig', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -243,30 +245,40 @@ def export_to_csv(exp: Experiment, output_path: str):
                 'Expected Answer': c.expectedAnswer,
                 'Actual Answer': c.actualAnswer or "",
                 'Status': c.status or "PENDING",
-                'App Name': c.appName
+                'App Name': c.appName,
+                'Judge Score': c.judgeScore if c.judgeScore is not None else "",
+                'Judge Explanation': c.judgeExplanation or ""
             })
 
 def normalize_tool(tool_str: str) -> str:
     """
     Normalize a tool call string for comparison.
-    Example: 'Add(b=1, a=2)' -> 'add(a=1, b=2)'
+    Example: 'Add(b="1", a=2)' -> 'add(a=2, b=1)'
     """
     tool_str = tool_str.strip()
     if "(" not in tool_str:
         return tool_str.lower()
-    
+
     name_part, arg_part = tool_str.split("(", 1)
     name = name_part.strip().lower()
-    
+
     # Clean up arguments
     args_content = arg_part.replace(")", "").strip()
     if not args_content:
         return name
-    
-    # Split by comma
-    args = [a.strip().lower() for a in args_content.split(",") if a.strip()]
+
+    # Split by comma and strip quotes from values
+    def normalize_arg(a: str) -> str:
+        a = a.strip().lower()
+        if '=' in a:
+            k, v = a.split('=', 1)
+            v = v.strip().strip('"\'')
+            return f"{k.strip()}={v}"
+        return a
+
+    args = [normalize_arg(a) for a in args_content.split(",") if a.strip()]
     args.sort()
-    
+
     return f"{name}({', '.join(args)})"
 
 def compare_tools(expected_str: str, actual_str: str, verify_args: bool = True) -> bool:
@@ -473,3 +485,82 @@ def generate_test_cases(context: str, num_cases: int, api_key: str, model: str =
         return test_cases
     except Exception as e:
         raise Exception(f"Failed to generate test cases via Gemini: {str(e)}")
+
+def judge_test_case(case: TestCase, api_key: str, model: str = "gemini-3-flash-preview") -> Dict[str, Any]:
+    """
+    Uses Gemini as a judge to evaluate if the Agent's actual tools and answer
+    effectively solved the user's question.
+    """
+    if not api_key:
+        return {"score": 0, "explanation": "Judge API key missing"}
+
+    prompt = f"""
+    You are an expert AI Quality Auditor focusing on 'Tool Use' and 'Presentation Logic'.
+    Your task is to judge if an AI Agent correctly acted on a user request based on its tool-calling behavior.
+
+    [User's Question]
+    {case.q}
+
+    [Agent's Actual Tool Calls]
+    {case.actualTools}
+
+    [Agent's Final Text Answer]
+    {case.actualAnswer}
+
+    [CRITICAL PRE-CHECK — Evaluate this FIRST before anything else]
+    Does the Agent's Final Text Answer contain any of the following?
+    - An error message (e.g., "Error", "Exception", "failed", "timeout")
+    - A refusal or inability to answer (e.g., "無法", "抱歉我不知道", "I cannot", "I don't know", "sorry", "無法回答", "無法提供")
+    - An empty or near-empty response
+
+    If YES → This is a CRITICAL FAILURE. Assign a score of 0-20 regardless of tool calls.
+    The reason MUST start with "【需排查】" and explain what went wrong and what should be investigated
+    (e.g., tool misconfiguration, API error, missing permissions, or agent logic issue).
+
+    [Evaluation Task — only if pre-check passes]
+    Analyze the Agent's performance focusing ONLY on the following two criteria:
+
+    1. Tool Selection (60%): Did the Agent choose the most appropriate tool(s) for the user's request? Are the parameters logically derived from the question?
+    2. Presentation Logic (40%): Did the Agent present the result in a clear, professional, and helpful format (e.g., using tables, lists, or summaries as requested)?
+
+    CRITICAL INSTRUCTION: Ignore the 'Factual Correctness' of the data. Since the model's internal knowledge might be outdated, focus ONLY on whether it TRIED to call the right tools and if it FORMATTED the response correctly.
+
+    [Rubric]
+    - Score 0-20:  CRITICAL FAILURE — agent returned an error or refused to answer. Reason must start with "【需排查】".
+    - Score 21-49: Called wrong/no tools, or completely ignored formatting requests.
+    - Score 50-79: Correct tool choice but poor presentation, or slightly suboptimal tool choice.
+    - Score 80-100: Perfect tool choice and excellent presentation format.
+
+    [Output Format]
+    Return ONLY a JSON object:
+    {{
+      "score": (integer 0-100),
+      "reason": "Concise explanation in Traditional Chinese (zh-tw) focusing on tool logic and presentation style."
+    }}
+    """
+
+    api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": prompt
+            }]
+        }],
+        "generationConfig": {
+            "response_mime_type": "application/json"
+        }
+    }
+
+    try:
+        response = requests.post(api_url, json=payload, timeout=30)
+        if response.status_code == 200:
+            res_json = response.json()
+            content = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            result = json.loads(content)
+            return {
+                "score": result.get("score", 0),
+                "explanation": result.get("reason", "No reason provided")
+            }
+        return {"score": 0, "explanation": f"Judge API error: {response.status_code}"}
+    except Exception as e:
+        return {"score": 0, "explanation": f"Judge failed: {str(e)}"}

@@ -2,13 +2,20 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from dotenv import load_dotenv
 import requests
 import os
 import json
+import uuid
+
+load_dotenv()
+from typing import List, Optional, Any, Dict
 from .core import (
     Experiment, EvalRequest, list_experiments, save_experiment_data, 
     delete_experiment_data, run_single_test, request_with_retry, 
-    BASE_DIR, ensure_dirs
+    BASE_DIR, ensure_dirs, TestCase, get_config, fetch_mcp_context, 
+    generate_test_cases, judge_test_case
 )
 
 app = FastAPI(title="ADEval Server")
@@ -40,9 +47,85 @@ def list_apps(api_url: str):
     except Exception as e:
         return {"apps": []}
 
+@app.post("/api/generate")
+async def generate_exp_api(req: Dict[str, Any]):
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="GEMINI_API_KEY not set on server")
+    
+    mcp_url = req.get("mcpUrl")
+    num = req.get("num", 5)
+    tools = req.get("tools")
+    lang = req.get("lang", "zh-tw")
+    desc = req.get("desc")
+    app_name = req.get("appName")
+    name = req.get("name")
+
+    if not mcp_url:
+        raise HTTPException(status_code=400, detail="mcpUrl is required")
+
+    context = fetch_mcp_context(mcp_url)
+    if context.startswith("Error") or context.startswith("Failed"):
+        raise HTTPException(status_code=400, detail=context)
+    
+    try:
+        test_cases = generate_test_cases(
+            context, num, api_key, 
+            lang=lang, description=desc, num_tools=tools
+        )
+        
+        config = get_config()
+        target_app = app_name or config.appName
+        for tc in test_cases:
+            tc.appName = target_app
+            
+        exp_name = name or f"Generated from UI ({uuid.uuid4().hex[:4]})"
+        exp = Experiment(
+            id='exp_' + uuid.uuid4().hex[:9],
+            name=exp_name,
+            userId=config.userId,
+            apiUrl=config.apiUrl,
+            testCases=test_cases
+        )
+        save_experiment_data(exp)
+        return exp
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/run-test")
-def run_test(req: EvalRequest):
-    return run_single_test(req)
+def run_test(req: Dict[str, Any]):
+    # Extract eval_req from data
+    if "app_name" in req:
+        # It's a direct EvalRequest
+        eval_req = EvalRequest(**req)
+        judge = False
+        expected_tools = ""
+    else:
+        # It's a wrapped request with judge options
+        eval_req_data = req.get("eval_req")
+        if not eval_req_data:
+            raise HTTPException(status_code=400, detail="Missing eval_req")
+        eval_req = EvalRequest(**eval_req_data)
+        judge = req.get("judge", False)
+        expected_tools = req.get("expected_tools", "")
+    
+    result = run_single_test(eval_req)
+    
+    # Handle Judge logic
+    api_key = os.getenv("GEMINI_API_KEY")
+    if judge and api_key:
+        case = TestCase(
+            appName=eval_req.app_name,
+            q=eval_req.question,
+            actualTools=result.get("tools"),
+            actualAnswer=result.get("answer"),
+            expectedTools=expected_tools
+        )
+        judgement = judge_test_case(case, api_key)
+        result["judgeScore"] = judgement["score"]
+        result["judgeExplanation"] = judgement["explanation"]
+        
+    return result
 
 @app.post("/api/run-sse-proxy")
 async def run_sse_proxy(request: Request):

@@ -26,6 +26,10 @@ async function runTestApi(payload) {
     return await apiCall('/api/run-test', 'POST', payload);
 }
 
+async function generateExperimentApi(payload) {
+    return await apiCall('/api/generate', 'POST', payload);
+}
+
 async function runSseApi(apiUrl, payload, onEvent) {
     const res = await fetch('/api/run-sse-proxy', {
         method: 'POST',

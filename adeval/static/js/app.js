@@ -7,12 +7,26 @@ createApp({
         const isDark = ref(localStorage.getItem('theme') === 'dark');
         const isFetching = ref(false);
         const saveStatus = ref('synced'); // 'synced', 'saving', 'error'
-        const config = ref({ apiUrl: 'http://localhost:8000', userId: 'eval-user', verifyArgs: false });
+        const config = ref({ 
+            apiUrl: 'http://localhost:8000', 
+            userId: 'eval-user', 
+            verifyArgs: false,
+            enableJudge: false
+        });
         const apps = ref(['MathAgent']);
         const experiments = ref([]);
         const currentExp = ref(null);
         const isRunning = ref(false);
         const isComparing = ref(false);
+        const isGenerating = ref(false);
+        const showGenerateModal = ref(false);
+        const genConfig = ref({
+            mcpUrl: '',
+            num: 5,
+            tools: null,
+            desc: '',
+            lang: 'zh-tw'
+        });
         const progress = ref(0);
         const single = ref({ appName: '', q: '1234 + 5678 = ?', state: '{}', result: null });
         const compare = ref({
@@ -60,7 +74,6 @@ createApp({
 
         const toggleSidebar = () => {
             isSidebarOpen.value = !isSidebarOpen.value;
-            console.log('Sidebar toggled:', isSidebarOpen.value);
         };
 
         const fetchExperiments = async () => {
@@ -91,7 +104,31 @@ createApp({
                 loadExperiment(newExp);
             } catch (e) {
                 console.error("Failed to create experiment", e);
-                alert("Failed to create experiment. Please check if the server is running.");
+                alert("Failed to create experiment.");
+            }
+        };
+
+        const generateExperiment = async () => {
+            if (!genConfig.value.mcpUrl) return alert("Please enter MCP URL");
+            isGenerating.value = true;
+            try {
+                const newExp = await generateExperimentApi({
+                    mcpUrl: genConfig.value.mcpUrl,
+                    num: genConfig.value.num,
+                    tools: genConfig.value.tools,
+                    desc: genConfig.value.desc,
+                    lang: genConfig.value.lang,
+                    appName: single.value.appName
+                });
+                await fetchExperiments();
+                loadExperiment(newExp);
+                showGenerateModal.value = false;
+                alert(`Successfully generated ${newExp.testCases.length} cases!`);
+            } catch (e) {
+                console.error("Generation failed", e);
+                alert("Generation failed: " + (e.detail || e.message || "Unknown error"));
+            } finally {
+                isGenerating.value = false;
             }
         };
 
@@ -100,16 +137,7 @@ createApp({
             config.value.userId = exp.userId || 'eval-user';
             config.value.apiUrl = exp.apiUrl || 'http://localhost:8000';
             single.value.appName = exp.testCases[0]?.appName || apps.value[0];
-            single.value.state = '{}';
             
-            if (apps.value.length >= 2) {
-                compare.value.agent1 = apps.value[0];
-                compare.value.agent2 = apps.value[1];
-            } else if (apps.value.length === 1) {
-                compare.value.agent1 = apps.value[0];
-                compare.value.agent2 = apps.value[0];
-            }
-
             fetchApps();
         };
 
@@ -123,8 +151,6 @@ createApp({
                 const idx = experiments.value.findIndex(e => e.id === currentExp.value.id);
                 if (idx !== -1) {
                     experiments.value[idx].name = currentExp.value.name;
-                    experiments.value[idx].userId = currentExp.value.userId;
-                    experiments.value[idx].apiUrl = currentExp.value.apiUrl;
                 }
                 saveStatus.value = 'synced';
             } catch (e) {
@@ -188,8 +214,15 @@ createApp({
                 const match = t.match(/^([^(]+)\((.*)\)$/);
                 if (!match) return t.trim().toLowerCase();
                 const name = match[1].trim().toLowerCase();
+                const normalizeArg = (a) => {
+                    const eqIdx = a.indexOf('=');
+                    if (eqIdx === -1) return a;
+                    const k = a.slice(0, eqIdx).trim();
+                    const v = a.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+                    return `${k}=${v}`;
+                };
                 const args = (match[2] || '').split(',')
-                    .map(a => a.trim().toLowerCase())
+                    .map(a => normalizeArg(a.trim().toLowerCase()))
                     .filter(a => a)
                     .sort()
                     .join(', ');
@@ -199,88 +232,57 @@ createApp({
             try {
                 for (let i = 0; i < cases.length; i++) {
                     const c = cases[i];
-                    let success = false;
-                    let retryCount = 0;
-                    const maxRetries = 3;
-
-                    while (!success && retryCount <= maxRetries) {
-                        try {
-                            if (retryCount > 0) {
-                                c.actualAnswer = `Retrying (${retryCount}/${maxRetries})...`;
-                            }
-
-                            const data = await runTestApi({
+                    try {
+                        const payload = {
+                            eval_req: {
                                 app_name: c.appName, 
                                 question: c.q, 
                                 state: c.state,
                                 api_url: config.value.apiUrl,
                                 user_id: config.value.userId 
-                            });
-                            
-                            if (data.tools === "Error" && retryCount < maxRetries) {
-                                throw new Error(data.answer);
-                            }
+                            },
+                            judge: config.value.enableJudge,
+                            expected_tools: c.expectedTools
+                        };
 
-                            const actualToolsStr = data.tools || "None";
-                            const actualToolsList = actualToolsStr.split('\n').map(t => normalizeTool(t));
+                        const data = await runTestApi(payload);
+                        
+                        const actualToolsStr = data.tools || "None";
+                        const actualToolsList = actualToolsStr.split('\n').map(t => normalizeTool(t));
 
-                            const expectedToolsInput = (c.expectedTools || "");
-                            const expectedToolsList = [];
-                            let currentTool = "";
-                            let depth = 0;
-                            for (let char of expectedToolsInput) {
-                                if (char === '(') depth++;
-                                else if (char === ')') depth--;
-                                
-                                if ((char === ',' || char === '\n') && depth === 0) {
-                                    if (currentTool.trim()) expectedToolsList.push(currentTool.trim());
-                                    currentTool = "";
-                                } else {
-                                    currentTool += char;
+                        const expectedToolsList = (c.expectedTools || "").split('\n').map(t => t.trim()).filter(t => t);
+                        
+                        let toolPass = true;
+                        for (const et of expectedToolsList) {
+                            if (config.value.verifyArgs) {
+                                const normalizedEt = normalizeTool(et);
+                                if (!actualToolsList.includes(normalizedEt)) {
+                                    toolPass = false;
+                                    break;
                                 }
-                            }
-                            if (currentTool.trim()) expectedToolsList.push(currentTool.trim());
-                            
-                            let toolPass = true;
-                            for (const et of expectedToolsList) {
-                                if (config.value.verifyArgs) {
-                                    const normalizedEt = normalizeTool(et);
-                                    if (!actualToolsList.includes(normalizedEt)) {
-                                        toolPass = false;
-                                        break;
-                                    }
-                                } else {
-                                    const toolNameOnly = et.split('(')[0].trim().toLowerCase();
-                                    const exists = actualToolsList.some(at => at.startsWith(toolNameOnly + '(') || at === toolNameOnly);
-                                    if (!exists) {
-                                        toolPass = false;
-                                        break;
-                                    }
-                                }
-                            }
-                            
-                            c.actualTools = data.tools;
-                            c.actualAnswer = data.answer;
-                            c.rawResponse = data.raw_response;
-                            c.showTrace = false;
-                            c.status = (toolPass && (c.expectedAnswer ? (data.answer || "").toLowerCase().includes(c.expectedAnswer.toLowerCase()) : true)) ? 'PASS' : 'FAIL';
-                            success = true;
-                        } catch (e) { 
-                            retryCount++;
-                            if (retryCount > maxRetries) {
-                                c.status = 'FAIL'; 
-                                c.actualTools = "Error";
-                                c.actualAnswer = e.message; 
                             } else {
-                                await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+                                const toolNameOnly = et.split('(')[0].trim().toLowerCase();
+                                const exists = actualToolsList.some(at => at.startsWith(toolNameOnly + '(') || at === toolNameOnly);
+                                if (!exists) {
+                                    toolPass = false;
+                                    break;
+                                }
                             }
-                        } 
+                        }
+                        
+                        c.actualTools = data.tools;
+                        c.actualAnswer = data.answer;
+                        c.rawResponse = data.raw_response;
+                        c.judgeScore = data.judgeScore;
+                        c.judgeExplanation = data.judgeExplanation;
+                        c.status = (toolPass && (c.expectedAnswer ? (data.answer || "").toLowerCase().includes(c.expectedAnswer.toLowerCase()) : true)) ? 'PASS' : 'FAIL';
+                    } catch (e) { 
+                        c.status = 'FAIL'; 
+                        c.actualAnswer = e.message; 
                     }
                     progress.value = Math.round(((i + 1) / cases.length) * 100);
                     await saveCurrentExperiment();
                 }
-            } catch (err) {
-                console.error("Batch execution interrupted", err);
             } finally {
                 isRunning.value = false;
             }
@@ -323,8 +325,8 @@ createApp({
         const exportQuestionBank = () => {
             if (!currentExp.value) return;
             const headers = "App Name,Question,Session State,Expected Tools,Expected Answer\n";
-            const rows = currentExp.value.testCases.map(c => 
-                `"${c.appName}","${c.q}","${(c.state || '{}').replace(/"/g, '""')}","${c.expectedTools}","${c.expectedAnswer || ''}"`
+            const rows = currentExp.value.testCases.map(c =>
+                `"${c.appName}","${(c.q || '').replace(/"/g, '""')}","${(c.state || '{}').replace(/"/g, '""')}","${(c.expectedTools || '').replace(/"/g, '""')}","${(c.expectedAnswer || '').replace(/"/g, '""')}"`
             );
             const now = new Date().toISOString().replace(/[:T]/g, '_').slice(0, 19);
             downloadCSV(`question_bank_${currentExp.value.name}_${now}.csv`, headers, rows);
@@ -332,9 +334,9 @@ createApp({
 
         const exportResults = () => {
             if (!currentExp.value) return;
-            const headers = "App Name,Question,Session State,Expected Tools,Expected Answer,Actual Tools,Actual Answer,Status\n";
-            const rows = currentExp.value.testCases.map(c => 
-                `"${c.appName}","${c.q}","${(c.state || '{}').replace(/"/g, '""')}","${c.expectedTools}","${c.expectedAnswer || ''}","${c.actualTools || ''}","${c.actualAnswer || ''}","${c.status || ''}"`
+            const headers = "App Name,Question,Session State,Expected Tools,Expected Answer,Actual Tools,Actual Answer,Status,Judge Score,Judge Reason\n";
+            const rows = currentExp.value.testCases.map(c =>
+                `"${c.appName}","${(c.q || '').replace(/"/g, '""')}","${(c.state || '{}').replace(/"/g, '""')}","${(c.expectedTools || '').replace(/"/g, '""')}","${(c.expectedAnswer || '').replace(/"/g, '""')}","${(c.actualTools || '').replace(/"/g, '""')}","${(c.actualAnswer || '').replace(/"/g, '""')}","${c.status || ''}","${c.judgeScore || ''}","${(c.judgeExplanation || '').replace(/"/g, '""')}"`
             );
             const now = new Date().toISOString().replace(/[:T]/g, '_').slice(0, 19);
             downloadCSV(`eval_results_${currentExp.value.name}_${now}.csv`, headers, rows);
@@ -347,13 +349,10 @@ createApp({
 
         const runComparison = async () => {
             if (!compare.value.agent1 || !compare.value.agent2 || !compare.value.query) return; 
-            
             isComparing.value = true;
             compare.value.events1 = [];
             compare.value.events2 = [];
-            compare.value.usage1 = null;
-            compare.value.usage2 = null;
-
+            
             const runAgent = async (agentName, eventsKey, usageKey) => {
                 try {
                     const data = await runTestApi({
@@ -363,52 +362,27 @@ createApp({
                         api_url: config.value.apiUrl,
                         user_id: config.value.userId
                     });
-
-                    if (data.tools === "Error") {
-                        alert(`Agent ${agentName} Error: ${data.answer}`);
-                        return;
-                    }
-
-                    compare.value[eventsKey] = data.raw_response.map(event => {
-                        if (event.content && event.content.parts) {
-                            event.content.parts = event.content.parts.map(part => {
-                                if (part.functionCall || part.functionResponse) {
-                                    return { ...part, _expanded: false };
-                                }
-                                return part;
-                            });
-                        }
-                        return event;
-                    });
-                    
+                    compare.value[eventsKey] = data.raw_response;
                     const lastEvent = [...data.raw_response].reverse().find(e => e.usageMetadata);
-                    if (lastEvent) {
-                        compare.value[usageKey] = lastEvent.usageMetadata;
-                    }
-                } catch (e) {
-                    console.error(`Failed to run agent ${agentName}`, e);
-                    alert(`Connection failed for ${agentName}.`);
-                }
+                    if (lastEvent) compare.value[usageKey] = lastEvent.usageMetadata;
+                } catch (e) { console.error(e); }
             };
 
             await Promise.all([
                 runAgent(compare.value.agent1, 'events1', 'usage1'),
                 runAgent(compare.value.agent2, 'events2', 'usage2')
             ]);
-
             isComparing.value = false;
         };
 
         onMounted(() => {
             fetchExperiments();
-            if (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                isDark.value = true;
-            }
             updateThemeClass(isDark.value);
         });
 
         return { 
             tab, isSidebarOpen, isDark, isFetching, saveStatus, config, apps, experiments, currentExp, testCases, evalStats, single, isRunning, isComparing, progress, compare,
+            isGenerating, showGenerateModal, genConfig, generateExperiment,
             toggleTheme, toggleSidebar, fetchApps, addCase, removeCase, runSingle, runAll, runComparison,
             handleFileUpload, exportQuestionBank, exportResults,
             createNewExperiment, loadExperiment, saveCurrentExperiment, deleteExperiment, copyTrace

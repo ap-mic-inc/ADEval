@@ -46,7 +46,10 @@
                 <div class="p-4 flex-1 overflow-y-auto">
                     <div class="flex items-center justify-between mb-4 px-2">
                         <h3 class="text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase">Experiments</h3>
-                        <button @click="createNewExperiment" class="text-indigo-600 dark:text-indigo-400 hover:scale-110 transition"><i class="fas fa-plus-circle"></i></button>
+                        <div class="flex items-center space-x-2">
+                            <button @click="showGenerateModal = true" class="text-emerald-600 dark:text-emerald-400 hover:scale-110 transition" title="Generate from MCP"><i class="fas fa-magic"></i></button>
+                            <button @click="createNewExperiment" class="text-indigo-600 dark:text-indigo-400 hover:scale-110 transition" title="Create New"><i class="fas fa-plus-circle"></i></button>
+                        </div>
                     </div>
                     <div class="space-y-1">
                         <div v-for="exp in experiments" :key="exp.id" 
@@ -61,10 +64,6 @@
                                 <i class="fas fa-trash-alt text-[10px]"></i>
                             </button>
                         </div>
-                    </div>
-                    <div v-if="experiments.length === 0" class="mt-8 px-4 text-center">
-                        <p class="text-xs text-gray-400 italic">No experiments found.</p>
-                        <button @click="createNewExperiment" class="mt-4 text-[10px] font-black text-indigo-600 uppercase border border-indigo-100 dark:border-indigo-900 px-4 py-2 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition">Create First</button>
                     </div>
                 </div>
 
@@ -208,6 +207,14 @@
                                 <div class="flex items-center space-x-4">
                                     <label class="flex items-center cursor-pointer group">
                                         <div class="relative flex items-center">
+                                            <input type="checkbox" v-model="config.enableJudge" class="sr-only">
+                                            <div class="w-9 h-5 bg-gray-200 dark:bg-gray-700 rounded-full transition-colors shadow-inner" :class="config.enableJudge ? 'bg-indigo-500 dark:bg-indigo-600' : ''"></div>
+                                            <div class="absolute left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200" :style="{ transform: config.enableJudge ? 'translateX(1rem)' : 'translateX(0)' }"></div>
+                                        </div>
+                                        <span class="ml-3 text-[10px] font-black text-gray-400 group-hover:text-indigo-500 transition-colors uppercase tracking-widest">LLM Judge</span>
+                                    </label>
+                                    <label class="flex items-center cursor-pointer group">
+                                        <div class="relative flex items-center">
                                             <input type="checkbox" v-model="config.verifyArgs" class="sr-only">
                                             <div class="w-9 h-5 bg-gray-200 dark:bg-gray-700 rounded-full transition-colors shadow-inner" :class="config.verifyArgs ? 'bg-indigo-500 dark:bg-indigo-600' : ''"></div>
                                             <div class="absolute left-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200" :style="{ transform: config.verifyArgs ? 'translateX(1rem)' : 'translateX(0)' }"></div>
@@ -218,7 +225,6 @@
                                 </div>
                             </div>
                             <input type="file" @change="handleFileUpload" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-[10px] file:font-black file:bg-indigo-50 dark:file:bg-gray-800 file:text-indigo-600 dark:file:text-indigo-400 hover:file:bg-indigo-100 dark:hover:file:bg-gray-700 cursor-pointer">
-                            <p class="text-xs text-gray-400 mt-3 italic">CSV columns: App Name, Question, Session State, Expected Tools, Expected Answer</p>
                         </div>
                         <div class="bg-indigo-600 dark:bg-indigo-700 p-6 rounded-2xl shadow-xl shadow-indigo-100 dark:shadow-none flex flex-col justify-between relative overflow-hidden transition-theme">
                             <div v-if="isRunning" class="absolute bottom-0 left-0 h-1 bg-white/30 transition-all duration-300" :style="{ width: progress + '%' }"></div>
@@ -258,17 +264,17 @@
 
                     <div class="bg-white dark:bg-darkcard rounded-2xl border-2 border-gray-100 dark:border-gray-800 shadow-sm overflow-hidden transition-theme">
                         <div class="overflow-x-auto max-w-full">
-                            <table class="w-full text-left border-collapse min-w-[1600px] table-fixed">
+                            <table class="w-full text-left border-collapse min-w-[1800px] table-fixed">
                                 <thead>
                                     <tr class="bg-gray-50 dark:bg-gray-900/50 text-[10px] font-black text-gray-400 dark:text-gray-500 uppercase tracking-widest text-center">
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-32">Agent Name</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-64">Question</th>
-                                        <th class="px-6 py-5 border-b dark:border-gray-800 w-48 text-center">Session State</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-40 text-center">Expected Tools</th>
-                                        <th class="px-6 py-5 border-b dark:border-gray-800 w-48 text-center">Expected Answer</th>
+                                        <th class="px-6 py-5 border-b dark:border-gray-800 w-40 text-center">Expected Answer</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-40 text-center">Actual Tools</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-64 text-center">Actual Answer</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-32 text-center">Status</th>
+                                        <th class="px-6 py-5 border-b dark:border-gray-800 w-48 text-center">LLM Judge</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-24 text-center">Trace</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-12 text-center"></th>
                                     </tr>
@@ -283,9 +289,6 @@
                                             </td>
                                             <td class="px-6 py-4 align-top">
                                                 <textarea v-model="case_.q" @blur="saveCurrentExperiment" class="w-full bg-transparent font-bold text-gray-700 dark:text-gray-200 outline-none resize-none p-1 transition-theme" placeholder="Question..."></textarea>
-                                            </td>
-                                            <td class="px-6 py-4 align-top">
-                                                <textarea v-model="case_.state" @blur="saveCurrentExperiment" class="w-full bg-transparent text-indigo-600 dark:text-indigo-400 outline-none resize-none p-1 transition-theme font-mono text-[10px]" placeholder='{}'></textarea>
                                             </td>
                                             <td class="px-6 py-4 align-top">
                                                 <textarea v-model="case_.expectedTools" @blur="saveCurrentExperiment" class="w-full bg-transparent outline-none text-indigo-600 dark:text-indigo-400 font-black resize-none p-1 transition-theme text-center" placeholder="tool1&#10;tool2"></textarea>
@@ -303,6 +306,13 @@
                                                 <div v-if="case_.status === 'PASS'" class="bg-emerald-50 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 py-1.5 px-3 rounded-full font-black text-[9px] uppercase shadow-sm transition-theme"><i class="fas fa-check-circle mr-1"></i> PASS</div>
                                                 <div v-else-if="case_.status === 'FAIL'" class="bg-rose-50 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 py-1.5 px-3 rounded-full font-black text-[9px] uppercase shadow-sm transition-theme"><i class="fas fa-times-circle mr-1"></i> FAIL</div>
                                                 <div v-else class="text-gray-300 dark:text-gray-700 italic text-[10px] transition-theme">Pending</div>
+                                            </td>
+                                            <td class="px-6 py-4 align-top text-center">
+                                                <div v-if="case_.judgeScore !== undefined && case_.judgeScore !== null" class="space-y-1">
+                                                    <div :class="case_.judgeScore >= 80 ? 'text-emerald-500' : (case_.judgeScore >= 50 ? 'text-amber-500' : 'text-rose-500')" class="font-black text-sm">{{ case_.judgeScore }}/100</div>
+                                                    <div class="text-[10px] text-gray-400 leading-tight">{{ case_.judgeExplanation }}</div>
+                                                </div>
+                                                <span v-else class="text-gray-300 dark:text-gray-700 italic text-[10px]">-</span>
                                             </td>
                                             <td class="px-6 py-4 align-top text-center">
                                                 <button v-if="case_.rawResponse && case_.rawResponse.length" @click="case_.showTrace = !case_.showTrace" class="text-indigo-600 dark:text-indigo-400 font-black uppercase text-[10px] hover:underline flex items-center justify-center mx-auto">
@@ -378,7 +388,6 @@
                                     <p class="text-[10px] font-black uppercase tracking-widest">No data</p>
                                 </div>
                                 <template v-for="(event, idx) in compare.events1" :key="idx">
-                                    <!-- Tool Calls -->
                                     <div v-for="part in (event.content?.parts || [])" :key="part.functionCall?.name">
                                         <div v-if="part.functionCall" class="bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-xl p-4 mb-3">
                                             <div @click="part._expanded = !part._expanded" class="flex items-center justify-between cursor-pointer text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest" :class="part._expanded ? 'mb-2' : ''">
@@ -400,10 +409,6 @@
                                         </div>
                                     </div>
                                 </template>
-                            </div>
-                            <div v-if="compare.usage1" class="mt-4 pt-4 border-t dark:border-gray-800 flex justify-between text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                <span>Tokens: {{ compare.usage1.totalTokenCount }}</span>
-                                <span class="text-indigo-500">P: {{ compare.usage1.promptTokenCount }} / C: {{ compare.usage1.candidatesTokenCount }}</span>
                             </div>
                         </div>
 
@@ -418,7 +423,6 @@
                                     <p class="text-[10px] font-black uppercase tracking-widest">No data</p>
                                 </div>
                                 <template v-for="(event, idx) in compare.events2" :key="idx">
-                                    <!-- Tool Calls -->
                                     <div v-for="part in (event.content?.parts || [])" :key="part.functionCall?.name">
                                         <div v-if="part.functionCall" class="bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/30 rounded-xl p-4 mb-3">
                                             <div @click="part._expanded = !part._expanded" class="flex items-center justify-between cursor-pointer text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest" :class="part._expanded ? 'mb-2' : ''">
@@ -441,15 +445,49 @@
                                     </div>
                                 </template>
                             </div>
-                            <div v-if="compare.usage2" class="mt-4 pt-4 border-t dark:border-gray-800 flex justify-between text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                <span>Tokens: {{ compare.usage2.totalTokenCount }}</span>
-                                <span class="text-indigo-500">P: {{ compare.usage2.promptTokenCount }} / C: {{ compare.usage2.candidatesTokenCount }}</span>
-                            </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
+
+        <!-- Generation Modal -->
+        <div v-if="showGenerateModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+        <div class="bg-white dark:bg-darkcard w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden border dark:border-gray-800 animate-in fade-in zoom-in duration-300">
+            <div class="p-8 border-b dark:border-gray-800 flex justify-between items-center">
+                <h2 class="text-xl font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest flex items-center">
+                    <i class="fas fa-magic mr-3"></i> Generate Experiment
+                </h2>
+                <button @click="showGenerateModal = false" class="text-gray-400 hover:text-rose-500 transition"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <div class="p-8 space-y-6">
+                <div>
+                    <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">MCP Server URL</label>
+                    <input v-model="genConfig.mcpUrl" placeholder="https://.../mcp" class="w-full bg-gray-50 dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-xl p-4 focus:border-indigo-500 outline-none transition font-mono text-sm">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Number of Cases</label>
+                        <input v-model.number="genConfig.num" type="number" class="w-full bg-gray-50 dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-xl p-4 focus:border-indigo-500 outline-none transition font-bold">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Tools per Case</label>
+                        <input v-model.number="genConfig.tools" type="number" placeholder="Auto" class="w-full bg-gray-50 dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-xl p-4 focus:border-indigo-500 outline-none transition font-bold">
+                    </div>
+                </div>
+                <div>
+                    <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Additional Context / Instructions</label>
+                    <textarea v-model="genConfig.desc" rows="3" placeholder="Specify certain tools or scenarios..." class="w-full bg-gray-50 dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-xl p-4 focus:border-indigo-500 outline-none transition text-sm resize-none"></textarea>
+                </div>
+            </div>
+            <div class="p-8 bg-gray-50 dark:bg-gray-900/50 border-t dark:border-gray-800">
+                <button @click="generateExperiment" :disabled="isGenerating" class="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl hover:bg-black transition-all shadow-lg text-sm tracking-widest disabled:opacity-50">
+                    <span v-if="!isGenerating">START GENERATION</span>
+                    <span v-else><i class="fas fa-circle-notch fa-spin mr-2"></i> GENERATING...</span>
+                </button>
+            </div>
+        </div>
+    </div>
     </div>
 
     <!-- Logic and API scripts -->

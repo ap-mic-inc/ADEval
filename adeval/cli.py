@@ -8,7 +8,8 @@ from .core import (
     BASE_DIR, list_experiments, get_experiment, run_single_test, 
     delete_experiment_data, EvalRequest, save_experiment_data,
     get_config, save_config, import_csv, export_to_csv, GlobalConfig,
-    compare_tools, fetch_mcp_context, generate_test_cases, Experiment, uuid
+    compare_tools, fetch_mcp_context, generate_test_cases, Experiment, uuid,
+    judge_test_case
 )
 
 # Create the Typer app
@@ -165,7 +166,10 @@ def quick_test(
 def run_exp(
     exp_id: str = typer.Argument(..., help="The ID of the experiment to run"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full raw response on failure"),
-    verify_args: bool = typer.Option(True, "--verify-args/--no-verify-args", help="Whether to verify tool arguments")
+    verify_args: bool = typer.Option(True, "--verify-args/--no-verify-args", help="Whether to verify tool arguments"),
+    judge: bool = typer.Option(False, "--judge", help="Use Gemini as a judge to evaluate performance"),
+    judge_model: str = typer.Option("gemini-3-flash-preview", "--judge-model", help="Gemini model to use for judging"),
+    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key for judging")
 ):
     """
     ▶️  [bold yellow]Run a specific experiment by ID.[/bold yellow]
@@ -177,6 +181,8 @@ def run_exp(
     
     typer.secho(f"▶️  Running Experiment: {exp.name} ({exp.id})", fg=typer.colors.CYAN, bold=True)
     typer.echo(f"🔗 API URL: {exp.apiUrl}")
+    if judge:
+        typer.secho(f"⚖️  LLM Judging enabled ({judge_model})", fg=typer.colors.MAGENTA)
     typer.echo("=" * 60)
     
     total = len(exp.testCases)
@@ -194,7 +200,7 @@ def run_exp(
         case.actualAnswer = result.get("answer", "")
         case.rawResponse = result.get("raw_response")
         
-        # Use the new compare_tools logic
+        # 1. Traditional Match
         tools_match = compare_tools(case.expectedTools, case.actualTools, verify_args=verify_args)
         
         if tools_match:
@@ -203,10 +209,21 @@ def run_exp(
             case.status = 'PASS'
         else:
             typer.secho(f"  ❌ Tools Mismatch", fg=typer.colors.RED)
-            typer.echo(f"     Expected: {case.expectedTools.splitlines()}")
-            typer.echo(f"     Actual:   {case.actualTools.splitlines()}")
             case.status = 'FAIL'
         
+        # 2. LLM Judging
+        if judge:
+            with typer.progressbar(length=1, label="  ⚖️ Judging...") as progress:
+                judgement = judge_test_case(case, api_key, model=judge_model)
+                progress.update(1)
+            
+            case.judgeScore = judgement["score"]
+            case.judgeExplanation = judgement["explanation"]
+            
+            color = typer.colors.GREEN if case.judgeScore >= 80 else (typer.colors.YELLOW if case.judgeScore >= 50 else typer.colors.RED)
+            typer.secho(f"  ⚖️ Judge Score: {case.judgeScore}/100", fg=color, bold=True)
+            typer.echo(f"     Reason: {case.judgeExplanation}")
+
         typer.echo(f"  A: {case.actualAnswer[:100]}..." if len(case.actualAnswer) > 100 else f"  A: {case.actualAnswer}")
         typer.echo("-" * 40)
     
