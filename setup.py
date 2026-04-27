@@ -14,6 +14,7 @@ setup(
         "requests",
         "typer",
         "pydantic",
+        "python-dotenv",
     ],
     entry_points={
         "console_scripts": [
