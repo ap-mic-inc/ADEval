@@ -3,13 +3,14 @@ import uvicorn
 import webbrowser
 import os
 import json
+from typing import List, Optional
 from .server import app
 from .core import (
-    BASE_DIR, list_experiments, get_experiment, run_single_test, 
+    BASE_DIR, list_experiments, get_experiment, run_single_test,
     delete_experiment_data, EvalRequest, save_experiment_data,
     get_config, save_config, import_csv, export_to_csv, GlobalConfig,
     compare_tools, fetch_mcp_context, generate_test_cases, Experiment, uuid,
-    judge_test_case
+    judge_test_case, parse_header_args
 )
 
 # Create the Typer app
@@ -239,6 +240,14 @@ def run_exp(
 @cli.command(name="gendata")
 def gendata(
     mcp: str = typer.Option(None, "--mcp", "-m", help="URL of an MCP server to fetch tools from"),
+    header: Optional[List[str]] = typer.Option(
+        None, "--header", "-H",
+        help="Extra HTTP header for the MCP request, as 'Key: Value'. Repeatable."
+    ),
+    token: str = typer.Option(
+        None, "--token", envvar="MCP_AUTH_TOKEN",
+        help="Bearer token for the MCP server (shorthand for --header 'Authorization: Bearer ...')"
+    ),
     num: int = typer.Option(5, "--num", "-n", help="Number of test cases to generate"),
     name: str = typer.Option(None, "--name", help="Name of the experiment"),
     app: str = typer.Option(None, "--app", help="Target App Name for the experiment"),
@@ -260,9 +269,20 @@ def gendata(
         typer.secho("❌ Error: GEMINI_API_KEY is not set. Use --key or set the environment variable.", fg=typer.colors.RED)
         raise typer.Exit(1)
 
+    try:
+        mcp_headers = parse_header_args(header)
+    except ValueError as e:
+        typer.secho(f"❌ {str(e)}", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    if token:
+        mcp_headers.setdefault("Authorization", f"Bearer {token}")
+
     typer.echo(f"🌐 Fetching tools from MCP: {mcp}...")
-    context = fetch_mcp_context(mcp)
-    
+    if mcp_headers:
+        typer.echo(f"   Using headers: {', '.join(sorted(mcp_headers))}")
+    context = fetch_mcp_context(mcp, headers=mcp_headers)
+
     if context.startswith("Error") or context.startswith("Failed"):
         typer.secho(f"❌ Failed to fetch tools from MCP: {context}", fg=typer.colors.RED)
         raise typer.Exit(1)

@@ -22,6 +22,7 @@ createApp({
         const showGenerateModal = ref(false);
         const genConfig = ref({
             mcpUrl: '',
+            mcpToken: '',
             num: 5,
             tools: null,
             desc: '',
@@ -114,6 +115,7 @@ createApp({
             try {
                 const newExp = await generateExperimentApi({
                     mcpUrl: genConfig.value.mcpUrl,
+                    mcpToken: genConfig.value.mcpToken || undefined,
                     num: genConfig.value.num,
                     tools: genConfig.value.tools,
                     desc: genConfig.value.desc,

@@ -41,6 +41,29 @@ Execute all test cases in an experiment and show a real-time progress and a fina
 ### `adeval delete <EXP_ID>`
 Permanently remove an experiment's data.
 
+## Data Generation
+
+### `adeval gendata --mcp <MCP_URL>`
+Connect to an MCP server, read its tool definitions, and use Gemini to generate an experiment.
+- `--mcp`, `-m`: MCP server URL, including the endpoint path (e.g. `http://127.0.0.1:8000/mcp`).
+- `--header`, `-H`: Extra HTTP header as `'Key: Value'`. Repeatable. Required for MCP servers behind authentication.
+- `--token`: Bearer token shorthand, equivalent to `-H 'Authorization: Bearer <token>'`. Also readable from `MCP_AUTH_TOKEN`.
+- `--num`, `-n`: Number of test cases to generate (default: 5).
+- `--tools`: Target number of tool calls per case. `1` forces single-step questions.
+- `--lang`: Language of the generated questions (default: `zh-tw`).
+- `--desc`: Extra instructions to steer generation toward specific scenarios.
+- `--app`: App Name assigned to the generated test cases.
+- `--key`: Gemini API key. Also readable from `GEMINI_API_KEY`.
+
+Authenticated example:
+```bash
+adeval gendata --mcp http://127.0.0.1:8000/mcp \
+  --token "$MY_MCP_TOKEN" \
+  --num 20 --app docker_agent
+```
+
+Only header names are echoed to the terminal, never their values.
+
 ## Utility Commands
 
 ### `adeval test "<QUESTION>"`

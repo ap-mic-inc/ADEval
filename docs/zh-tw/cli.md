@@ -41,6 +41,29 @@ adeval config --url "http://localhost:8000" --user "dev_01"
 ### `adeval delete <EXP_ID>`
 永久刪除實驗數據。
 
+## 資料生成
+
+### `adeval gendata --mcp <MCP_URL>`
+連線至 MCP server 讀取工具定義，再用 Gemini 生成一組實驗。
+- `--mcp`、`-m`：MCP server 的 URL，需包含 endpoint 路徑（例如 `http://127.0.0.1:8000/mcp`）。
+- `--header`、`-H`：額外的 HTTP 標頭，格式為 `'Key: Value'`，可重複指定。MCP server 有啟用驗證時必填。
+- `--token`：Bearer token 簡寫，等同 `-H 'Authorization: Bearer <token>'`，也可由環境變數 `MCP_AUTH_TOKEN` 提供。
+- `--num`、`-n`：要生成的測試案例數量（預設 5）。
+- `--tools`：每個案例預期的工具呼叫次數，設為 `1` 可強制生成單步驟問題。
+- `--lang`：生成問句的語言（預設 `zh-tw`）。
+- `--desc`：額外指示，用來把生成方向導向特定情境。
+- `--app`：指派給生成案例的 App Name。
+- `--key`：Gemini API 金鑰，也可由環境變數 `GEMINI_API_KEY` 提供。
+
+需要驗證時的範例：
+```bash
+adeval gendata --mcp http://127.0.0.1:8000/mcp \
+  --token "$MY_MCP_TOKEN" \
+  --num 20 --app docker_agent
+```
+
+終端機只會印出標頭名稱，不會印出其內容值。
+
 ## 公用工具指令
 
 ### `adeval test "<問句>"`

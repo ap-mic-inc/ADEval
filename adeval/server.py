@@ -64,7 +64,15 @@ async def generate_exp_api(req: Dict[str, Any]):
     if not mcp_url:
         raise HTTPException(status_code=400, detail="mcpUrl is required")
 
-    context = fetch_mcp_context(mcp_url)
+    # Headers for MCP servers behind authentication. Accepts either an explicit
+    # header map, or a bearer token shorthand (also readable from the environment
+    # so the token never has to travel through the browser).
+    mcp_headers = dict(req.get("mcpHeaders") or {})
+    mcp_token = req.get("mcpToken") or os.getenv("MCP_AUTH_TOKEN")
+    if mcp_token:
+        mcp_headers.setdefault("Authorization", f"Bearer {mcp_token}")
+
+    context = fetch_mcp_context(mcp_url, headers=mcp_headers)
     if context.startswith("Error") or context.startswith("Failed"):
         raise HTTPException(status_code=400, detail=context)
     

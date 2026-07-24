@@ -300,10 +300,34 @@ def compare_tools(expected_str: str, actual_str: str, verify_args: bool = True) 
 
 # --- Generation Logic ---
 
-def fetch_mcp_context(url: str) -> str:
+def parse_header_args(values: Optional[List[str]]) -> Dict[str, str]:
+    """
+    Parse repeated 'Key: Value' strings (e.g. from --header) into a dict.
+    Raises ValueError on malformed input so the caller can report it clearly.
+    """
+    headers: Dict[str, str] = {}
+    for raw in values or []:
+        if ":" not in raw:
+            raise ValueError(
+                f"Invalid header '{raw}'. Expected format: 'Key: Value' "
+                "(e.g. 'Authorization: Bearer abc123')."
+            )
+        key, value = raw.split(":", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"Invalid header '{raw}'. Header name must not be empty.")
+        headers[key] = value.strip()
+    return headers
+
+
+def fetch_mcp_context(url: str, headers: Optional[Dict[str, str]] = None) -> str:
     """
     Fetch tool definitions from an MCP server using the "Streamable HTTP" protocol.
     Correctly handles JSON-RPC responses returned via SSE stream in POST body.
+
+    `headers` are merged into every request, which is what MCP servers behind
+    Bearer token / API key authentication require, e.g.
+    {"Authorization": "Bearer <token>"}.
     """
     def parse_sse_response(resp):
         for line in resp.iter_lines():
@@ -317,14 +341,29 @@ def fetch_mcp_context(url: str) -> str:
                     continue
         return None
 
+    auth_headers = dict(headers or {})
+
+    def auth_error(status_code: int) -> str:
+        if auth_headers:
+            return (
+                f"Error: MCP server returned {status_code} (authentication failed). "
+                "The credentials passed via --header were rejected."
+            )
+        return (
+            f"Error: MCP server returned {status_code} (authentication required). "
+            "Pass credentials with --header, e.g. "
+            "--header \"Authorization: Bearer <token>\"."
+        )
+
     try:
         headers = {
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json"
         }
-        
+        headers.update(auth_headers)
+
         session = requests.Session()
-        
+
         # 1. Initialize session
         init_rpc = {
             "jsonrpc": "2.0", "id": "init-1", "method": "initialize",
@@ -334,20 +373,26 @@ def fetch_mcp_context(url: str) -> str:
                 "clientInfo": {"name": "adeval", "version": "0.1.0"}
             }
         }
-        
+
         with session.post(url, json=init_rpc, headers=headers, timeout=30, stream=True) as r:
+            if r.status_code in (401, 403):
+                return auth_error(r.status_code)
+
             session_id = r.headers.get("Mcp-Session-Id")
             if session_id:
                 headers["Mcp-Session-Id"] = session_id
-            
-            # For some servers, the init result might be useful, 
+
+            # For some servers, the init result might be useful,
             # but we mostly need the session ID or to just complete the handshake.
             init_res = parse_sse_response(r)
-        
+
         # 2. Request tools list
         list_rpc = {"jsonrpc": "2.0", "id": "list-1", "method": "tools/list", "params": {}}
-        
+
         with session.post(url, json=list_rpc, headers=headers, timeout=30, stream=True) as r:
+            if r.status_code in (401, 403):
+                return auth_error(r.status_code)
+
             list_res = parse_sse_response(r)
             if list_res and "result" in list_res:
                 return json.dumps(list_res["result"], indent=2, ensure_ascii=False)
@@ -355,7 +400,11 @@ def fetch_mcp_context(url: str) -> str:
                 return f"MCP RPC Error: {json.dumps(list_res['error'])}"
 
         # 3. Fallback: Legacy SSE discovery
-        with session.get(url, headers={"Accept": "text/event-stream"}, stream=True, timeout=10) as r:
+        sse_headers = {"Accept": "text/event-stream", **auth_headers}
+        with session.get(url, headers=sse_headers, stream=True, timeout=10) as r:
+            if r.status_code in (401, 403):
+                return auth_error(r.status_code)
+
             if r.status_code == 200:
                 for line in r.iter_lines():
                     if not line: continue
@@ -371,7 +420,11 @@ def fetch_mcp_context(url: str) -> str:
                                     return json.dumps(res["result"], indent=2, ensure_ascii=False)
                             break
         
-        return f"Failed to get tools from {url}."
+        return (
+            f"Failed to get tools from {url}. "
+            "Check that the URL includes the MCP path (e.g. /mcp), that the server is "
+            "running, and that any required credentials are passed via --header."
+        )
 
     except Exception as e:
         return f"Error fetching MCP tools: {str(e)}"
@@ -438,8 +491,12 @@ def generate_test_cases(context: str, num_cases: int, api_key: str, model: str =
     try:
         response = requests.post(api_url, json=payload, timeout=60)
         if response.status_code != 200:
-            return [TestCase(appName="DefaultAgent", q=f"API Error {response.status_code}: {response.text[:200]}", expectedTools="None")]
-        
+            # Do NOT turn this into a TestCase: it would be silently written into the
+            # dataset as a bogus question and reported as a successful generation.
+            raise RuntimeError(
+                f"Gemini API error {response.status_code}: {response.text[:300]}"
+            )
+
         result = response.json()
         
         content = result['candidates'][0]['content']['parts'][0]['text'].strip()

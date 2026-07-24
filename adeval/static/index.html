@@ -465,6 +465,10 @@
                     <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">MCP Server URL</label>
                     <input v-model="genConfig.mcpUrl" placeholder="https://.../mcp" class="w-full bg-gray-50 dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-xl p-4 focus:border-indigo-500 outline-none transition font-mono text-sm">
                 </div>
+                <div>
+                    <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Bearer Token <span class="text-gray-300 dark:text-gray-600 normal-case tracking-normal font-medium">— optional, for authenticated MCP servers</span></label>
+                    <input v-model="genConfig.mcpToken" type="password" placeholder="Leave empty if the server needs no auth" class="w-full bg-gray-50 dark:bg-gray-900 border-2 border-gray-100 dark:border-gray-800 rounded-xl p-4 focus:border-indigo-500 outline-none transition font-mono text-sm">
+                </div>
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">Number of Cases</label>
