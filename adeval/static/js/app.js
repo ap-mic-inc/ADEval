@@ -232,6 +232,19 @@ createApp({
             }));
         });
 
+        // Clicking an axis label focuses that metric: the spoke highlights and a
+        // breakdown of every model's score on it appears beside the chart.
+        const selectedAxis = ref(null);
+        const selectAxis = (label) => {
+            selectedAxis.value = selectedAxis.value === label ? null : label;
+        };
+        // A stale selection (axis no longer present) would leave an empty panel.
+        watch(radarAxes, (axes) => {
+            if (selectedAxis.value && !axes.includes(selectedAxis.value)) {
+                selectedAxis.value = null;
+            }
+        });
+
         const radarSpokes = computed(() =>
             radarAxes.value.map((label, i) => {
                 const end = radarValuePoint(i, 100);
@@ -239,6 +252,7 @@ createApp({
                 const dx = labelPos.x - RADAR_CX;
                 return {
                     label,
+                    active: selectedAxis.value === label,
                     x2: end.x, y2: end.y,
                     lx: labelPos.x, ly: labelPos.y,
                     anchor: Math.abs(dx) < 8 ? 'middle' : (dx > 0 ? 'start' : 'end')
@@ -249,7 +263,11 @@ createApp({
         const radarSeries = computed(() =>
             benchmark.value.results.map((r, idx) => {
                 const color = RADAR_COLORS[idx % RADAR_COLORS.length];
-                const pts = radarAxes.value.map((axis, i) => radarValuePoint(i, r.radar?.[axis] ?? 0));
+                const pts = radarAxes.value.map((axis, i) => {
+                    const value = r.radar?.[axis] ?? 0;
+                    const p = radarValuePoint(i, value);
+                    return { x: p.x, y: p.y, axis, value, active: selectedAxis.value === axis };
+                });
                 const values = radarAxes.value.map(a => r.radar?.[a] ?? 0);
                 const avg = values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
                 return {
@@ -272,6 +290,18 @@ createApp({
                 best[axis] = Math.max(...radarSeries.value.map(s => s.radar?.[axis] ?? 0), 0);
             }
             return best;
+        });
+
+        // Ranking of every model on the focused axis, best first.
+        const axisDetail = computed(() => {
+            const axis = selectedAxis.value;
+            if (!axis) return null;
+            const rows = radarSeries.value
+                .map(s => ({ label: s.label, name: s.name, color: s.color, value: s.radar?.[axis] ?? 0 }))
+                .sort((a, b) => b.value - a.value);
+            const best = rows.length ? rows[0].value : 0;
+            rows.forEach(r => { r.isBest = r.value === best; });
+            return { axis, rows };
         });
 
         const updateThemeClass = (val) => {
@@ -588,6 +618,7 @@ createApp({
             view, openBenchmark, openExperimentView,
             benchmark, toggleBenchmarkExp, loadBenchmark,
             radarAxes, radarRings, radarSpokes, radarSeries, radarBest,
+            selectedAxis, selectAxis, axisDetail,
             radarW: RADAR_W, radarH: RADAR_H, radarCx: RADAR_CX, radarCy: RADAR_CY,
             toggleTheme, toggleSidebar, fetchApps, addCase, removeCase, runSingle, runAll, runComparison,
             handleFileUpload, exportQuestionBank, exportResults,

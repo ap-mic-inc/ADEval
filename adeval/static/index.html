@@ -511,7 +511,7 @@
 
                     <div v-if="radarSeries.length" class="bg-white dark:bg-darkcard p-8 rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm transition-theme">
                         <h3 class="text-xl font-black mb-1 text-gray-800 dark:text-gray-100">效能雷達圖 — MCP 工具使用能力</h3>
-                        <p class="text-xs text-gray-400 dark:text-gray-600 font-bold mb-6">所有軸皆為 0–100%，越外圈越好。</p>
+                        <p class="text-xs text-gray-400 dark:text-gray-600 font-bold mb-6">所有軸皆為 0–100%，越外圈越好。<span class="text-indigo-400">點擊任一軸標籤可聚焦該指標並查看各模型排名。</span></p>
 
                         <div class="flex flex-col xl:flex-row gap-8 items-center">
                             <!-- aspect-ratio is set inline: without it the browser falls back to
@@ -526,23 +526,58 @@
                                     <text :x="radarCx + 5" :y="ring.labelY" dominant-baseline="middle"
                                         class="fill-gray-300 dark:fill-gray-700" style="font-size: 9px; font-weight: 700">{{ ring.pct }}</text>
                                 </g>
-                                <!-- spokes + axis labels -->
-                                <g v-for="(spoke, i) in radarSpokes" :key="'spoke'+i">
+                                <!-- spokes + clickable axis labels -->
+                                <g v-for="(spoke, i) in radarSpokes" :key="'spoke'+i" @click="selectAxis(spoke.label)" style="cursor: pointer">
                                     <line :x1="radarCx" :y1="radarCy" :x2="spoke.x2" :y2="spoke.y2"
-                                        stroke="currentColor" class="text-gray-200 dark:text-gray-700" stroke-width="1"></line>
+                                        :stroke="spoke.active ? '#6366f1' : 'currentColor'"
+                                        :class="spoke.active ? '' : 'text-gray-200 dark:text-gray-700'"
+                                        :stroke-width="spoke.active ? 2 : 1"></line>
+                                    <!-- invisible wide hit area so the label is easy to click -->
+                                    <rect :x="spoke.lx - 60" :y="spoke.ly - 12" width="120" height="24" fill="transparent"></rect>
                                     <text :x="spoke.lx" :y="spoke.ly" :text-anchor="spoke.anchor" dominant-baseline="middle"
-                                        class="fill-gray-600 dark:fill-gray-300" style="font-size: 13px; font-weight: 800">{{ spoke.label }}</text>
+                                        :class="spoke.active ? 'fill-indigo-500' : 'fill-gray-600 dark:fill-gray-300'"
+                                        :style="{ fontSize: '13px', fontWeight: 800, textDecoration: spoke.active ? 'underline' : 'none' }">{{ spoke.label }}</text>
                                 </g>
                                 <!-- model polygons -->
-                                <g v-for="s in radarSeries" :key="s.id">
+                                <g v-for="s in radarSeries" :key="s.id" :opacity="selectedAxis ? 0.85 : 1">
                                     <polygon :points="s.points" :stroke="s.color" :fill="s.color" fill-opacity="0.12" stroke-width="2.5"
                                         stroke-linejoin="round"></polygon>
-                                    <circle v-for="(d, i) in s.dots" :key="i" :cx="d.x" :cy="d.y" r="4" :fill="s.color"></circle>
+                                    <template v-for="(d, i) in s.dots" :key="i">
+                                        <circle :cx="d.x" :cy="d.y" :r="d.active ? 6.5 : 4" :fill="s.color"
+                                            :stroke="d.active ? '#fff' : 'none'" :stroke-width="d.active ? 2 : 0"></circle>
+                                        <text v-if="d.active" :x="d.x" :y="d.y - 12" text-anchor="middle"
+                                            :fill="s.color" style="font-size: 12px; font-weight: 900">{{ d.value.toFixed(0) }}%</text>
+                                    </template>
                                 </g>
                             </svg>
 
                             <div class="w-full xl:flex-1 space-y-3">
-                                <div v-for="s in radarSeries" :key="'lg'+s.id" class="flex items-center justify-between border-2 border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4">
+                                <!-- Focused-axis breakdown: replaces the legend when an axis is selected -->
+                                <div v-if="axisDetail" class="border-2 border-indigo-200 dark:border-indigo-900/50 rounded-2xl overflow-hidden">
+                                    <div class="flex items-center justify-between bg-indigo-50 dark:bg-indigo-900/20 px-5 py-3">
+                                        <div class="font-black text-sm text-indigo-600 dark:text-indigo-300">{{ axisDetail.axis }}</div>
+                                        <button @click="selectAxis(axisDetail.axis)" class="text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-rose-500 transition">
+                                            <i class="fas fa-times mr-1"></i>清除
+                                        </button>
+                                    </div>
+                                    <div v-for="(row, ri) in axisDetail.rows" :key="row.label"
+                                        class="flex items-center px-5 py-3 border-t dark:border-gray-800">
+                                        <span class="w-6 text-xs font-black text-gray-300 dark:text-gray-600">{{ ri + 1 }}</span>
+                                        <span class="w-3 h-3 rounded-full mr-3 shrink-0" :style="{ backgroundColor: row.color }"></span>
+                                        <div class="flex-1 min-w-0">
+                                            <span class="font-black text-sm text-gray-800 dark:text-gray-100 truncate">{{ row.label }}</span>
+                                            <i v-if="row.isBest" class="fas fa-crown text-amber-400 text-[10px] ml-2"></i>
+                                        </div>
+                                        <!-- inline bar so ranking reads at a glance -->
+                                        <div class="hidden sm:block w-24 h-2 rounded-full bg-gray-100 dark:bg-gray-800 mr-3 overflow-hidden">
+                                            <div class="h-full rounded-full" :style="{ width: row.value + '%', backgroundColor: row.color }"></div>
+                                        </div>
+                                        <span class="font-mono font-black text-sm w-14 text-right" :style="{ color: row.color }">{{ row.value.toFixed(1) }}%</span>
+                                    </div>
+                                </div>
+
+                                <!-- Default legend: overall score per model -->
+                                <div v-else v-for="s in radarSeries" :key="'lg'+s.id" class="flex items-center justify-between border-2 border-gray-100 dark:border-gray-800 rounded-2xl px-5 py-4">
                                     <div class="flex items-center min-w-0">
                                         <span class="w-3 h-3 rounded-full mr-3 shrink-0" :style="{ backgroundColor: s.color }"></span>
                                         <div class="min-w-0">
@@ -569,8 +604,12 @@
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr v-for="axis in radarAxes" :key="axis" class="border-t dark:border-gray-800">
-                                        <td class="p-5 font-black text-gray-600 dark:text-gray-300 whitespace-nowrap">{{ axis }}</td>
+                                    <tr v-for="axis in radarAxes" :key="axis" @click="selectAxis(axis)" style="cursor: pointer"
+                                        :class="selectedAxis === axis ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'"
+                                        class="border-t dark:border-gray-800 transition-colors">
+                                        <td class="p-5 font-black whitespace-nowrap" :class="selectedAxis === axis ? 'text-indigo-600 dark:text-indigo-300' : 'text-gray-600 dark:text-gray-300'">
+                                            <i class="fas fa-crosshairs mr-2 text-[10px]" :class="selectedAxis === axis ? 'text-indigo-500' : 'text-gray-300 dark:text-gray-700'"></i>{{ axis }}
+                                        </td>
                                         <td v-for="s in radarSeries" :key="s.id + axis" class="p-5 text-right font-mono font-bold"
                                             :class="(s.radar[axis] ?? 0) === radarBest[axis] ? 'text-emerald-500 font-black' : 'text-gray-500 dark:text-gray-400'">
                                             {{ (s.radar[axis] ?? 0).toFixed(1) }}%
