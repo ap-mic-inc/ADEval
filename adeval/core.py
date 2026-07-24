@@ -310,7 +310,37 @@ def has_tool_call(case: TestCase) -> bool:
     actual = (case.actualTools or "").strip()
     return bool(actual) and actual not in ("None", "Error")
 
-def compute_metrics(exp: Experiment) -> Dict[str, Any]:
+def extract_readonly_tools(mcp_context: str) -> List[str]:
+    """
+    Pull the names of tools flagged `annotations.readOnlyHint` out of a
+    tools/list payload (as returned by fetch_mcp_context).
+
+    Used to score whether an agent stayed within read-only tools on a
+    read-only dataset. Tools without the hint are treated as write-capable,
+    which is the safe default.
+    """
+    try:
+        data = json.loads(mcp_context)
+    except (json.JSONDecodeError, ValueError):
+        return []
+
+    tools = data.get("tools") if isinstance(data, dict) else None
+    if not isinstance(tools, list):
+        return []
+
+    readonly = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        annotations = tool.get("annotations") or {}
+        if isinstance(annotations, dict) and annotations.get("readOnlyHint"):
+            name = tool.get("name")
+            if name:
+                readonly.append(name)
+    return readonly
+
+
+def compute_metrics(exp: Experiment, readonly_tools: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Tool-use metrics for an experiment, scored with SUBSET semantics: a case
     counts as a hit when every expected tool appears among the actual calls.
@@ -326,6 +356,7 @@ def compute_metrics(exp: Experiment) -> Dict[str, Any]:
 
     name_hits = 0
     arg_hits = 0
+    efficiencies = []
     for case in scorable:
         expected = _split_tools(case.expectedTools)
         actual = _split_tools(case.actualTools)
@@ -338,12 +369,20 @@ def compute_metrics(exp: Experiment) -> Dict[str, Any]:
         if all(normalize_tool(e) in actual_full for e in expected):
             arg_hits += 1
 
-    def pct(n: int, d: int) -> float:
+        # Call economy: how close the agent got to the expected number of calls.
+        # Fewer calls than expected also scores below 1.0 -- it means the agent
+        # skipped a step, not that it was efficient.
+        if actual:
+            efficiencies.append(min(len(expected), len(actual)) / max(len(expected), len(actual)))
+        else:
+            efficiencies.append(0.0)
+
+    def pct(n: float, d: float) -> float:
         return round((n / d) * 100, 1) if d else 0.0
 
     judged = [c.judgeScore for c in exp.testCases if c.judgeScore is not None]
 
-    return {
+    metrics = {
         "total": len(exp.testCases),
         "evaluated": len(evaluated),
         "scorable": len(scorable),
@@ -355,8 +394,50 @@ def compute_metrics(exp: Experiment) -> Dict[str, Any]:
         "name_rate": pct(name_hits, len(scorable)),
         "arg_hits": arg_hits,
         "arg_rate": pct(arg_hits, len(scorable)),
+        "efficiency": round(sum(efficiencies) / len(efficiencies) * 100, 1) if efficiencies else 0.0,
         "judged": len(judged),
         "judge_avg": round(sum(judged) / len(judged), 1) if judged else None,
+        "judge_rate": round(sum(judged) / len(judged), 1) if judged else 0.0,
+    }
+
+    # Read-only compliance is only meaningful when the caller tells us which
+    # tools are read-only (derived from the MCP server's readOnlyHint).
+    if readonly_tools:
+        allowed = {t.lower() for t in readonly_tools}
+        clean = 0
+        violations = {}
+        for case in evaluated:
+            used = {t.split("(")[0].strip().lower() for t in _split_tools(case.actualTools)}
+            offending = {t for t in used if t and t not in allowed}
+            if offending:
+                for tool in offending:
+                    violations[tool] = violations.get(tool, 0) + 1
+            else:
+                clean += 1
+        metrics["readonly_clean"] = clean
+        metrics["readonly_rate"] = pct(clean, len(evaluated))
+        metrics["readonly_violations"] = dict(sorted(violations.items(), key=lambda kv: -kv[1]))
+
+    return metrics
+
+
+# Radar axes: (metrics key, display label). Every value is already 0-100.
+RADAR_AXES = [
+    ("call_rate", "工具呼叫率"),
+    ("name_rate", "函式名正確率"),
+    ("arg_rate", "參數正確率"),
+    ("judge_rate", "呈現品質"),
+    ("efficiency", "呼叫效率"),
+    ("readonly_rate", "唯讀遵循度"),
+]
+
+
+def radar_profile(metrics: Dict[str, Any]) -> Dict[str, float]:
+    """Reduce a metrics dict to the radar axes, skipping ones that were not computed."""
+    return {
+        label: float(metrics[key])
+        for key, label in RADAR_AXES
+        if metrics.get(key) is not None and key in metrics
     }
 
 # --- Generation Logic ---

@@ -1,4 +1,5 @@
 import typer
+import unicodedata
 import uvicorn
 import webbrowser
 import os
@@ -8,44 +9,145 @@ from .server import app
 from .core import (
     BASE_DIR, list_experiments, get_experiment, run_single_test,
     delete_experiment_data, EvalRequest, save_experiment_data,
-    get_config, save_config, import_csv, export_to_csv, GlobalConfig,
+    get_config, save_config, import_csv, export_to_csv, GlobalConfig, request_with_retry,
     compare_tools, fetch_mcp_context, generate_test_cases, Experiment, uuid,
-    judge_test_case, parse_header_args, compute_metrics
+    judge_test_case, parse_header_args, compute_metrics, extract_readonly_tools,
+    radar_profile, RADAR_AXES, TestCase
 )
 
 
-def _print_metrics(exp):
+def _execute_experiment(exp, verify_args, judge, judge_model, api_key, quiet=False):
+    """Run every test case in an experiment, mutate it in place, and persist it.
+
+    Shared by `run` and `benchmark`; `quiet` collapses the per-case output to a
+    single progress line, which is what the multi-model runs need.
+    """
+    total = len(exp.testCases)
+    passed = 0
+
+    for i, case in enumerate(exp.testCases):
+        if not quiet:
+            typer.echo(f"[{i+1}/{total}] Q: {case.q}")
+
+        req = EvalRequest(
+            app_name=case.appName, api_url=exp.apiUrl, user_id=exp.userId,
+            question=case.q, state=case.state
+        )
+        result = run_single_test(req)
+
+        case.actualTools = result.get("tools", "")
+        case.actualAnswer = result.get("answer", "")
+        case.rawResponse = result.get("raw_response")
+
+        # 1. Traditional Match
+        tools_match = compare_tools(case.expectedTools, case.actualTools, verify_args=verify_args)
+        case.status = 'PASS' if tools_match else 'FAIL'
+        if tools_match:
+            passed += 1
+
+        # 2. LLM Judging
+        if judge:
+            judgement = judge_test_case(case, api_key, model=judge_model)
+            case.judgeScore = judgement["score"]
+            case.judgeExplanation = judgement["explanation"]
+
+        if quiet:
+            mark = typer.style("●", fg=typer.colors.GREEN if tools_match else typer.colors.RED)
+            typer.echo(f"\r  [{i+1}/{total}] {mark} ", nl=False)
+            continue
+
+        if tools_match:
+            typer.secho("  ✅ Tools Match", fg=typer.colors.GREEN)
+        else:
+            typer.secho("  ❌ Tools Mismatch", fg=typer.colors.RED)
+
+        if judge:
+            color = typer.colors.GREEN if case.judgeScore >= 80 else (
+                typer.colors.YELLOW if case.judgeScore >= 50 else typer.colors.RED)
+            typer.secho(f"  ⚖️ Judge Score: {case.judgeScore}/100", fg=color, bold=True)
+            typer.echo(f"     Reason: {case.judgeExplanation}")
+
+        answer = case.actualAnswer or ""
+        typer.echo(f"  A: {answer[:100]}..." if len(answer) > 100 else f"  A: {answer}")
+        typer.echo("-" * 40)
+
+    if quiet:
+        typer.echo()
+
+    save_experiment_data(exp)
+    return passed
+
+
+def _display_width(text):
+    """Terminal columns a string occupies -- CJK glyphs take two."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+
+
+def _pad(text, width, align="<"):
+    """Pad to a display width, so CJK labels line up in the tables below."""
+    padding = " " * max(0, width - _display_width(text))
+    return text + padding if align == "<" else padding + text
+
+
+def _rate_color(rate):
+    return typer.colors.GREEN if rate >= 80 else (
+        typer.colors.YELLOW if rate >= 50 else typer.colors.RED
+    )
+
+
+def _print_metrics(exp, readonly_tools=None):
     """Render the tool-use metrics block shared by `run` and `stats`."""
-    m = compute_metrics(exp)
+    m = compute_metrics(exp, readonly_tools=readonly_tools)
     if not m["evaluated"]:
         typer.secho("尚未執行任何測試案例，無指標可計算。", fg=typer.colors.YELLOW)
         return m
 
-    def color(rate):
-        return typer.colors.GREEN if rate >= 80 else (
-            typer.colors.YELLOW if rate >= 50 else typer.colors.RED
-        )
-
     typer.secho("🛠️  TOOL-USE METRICS", fg=typer.colors.CYAN, bold=True)
     rows = [
-        ("有工具呼叫率", m["call_rate"], m["called"], m["evaluated"]),
-        ("函式名正確率", m["name_rate"], m["name_hits"], m["scorable"]),
-        ("名稱+參數全對率", m["arg_rate"], m["arg_hits"], m["scorable"]),
+        ("有工具呼叫率", m["call_rate"], f"{m['called']}/{m['evaluated']}"),
+        ("函式名正確率", m["name_rate"], f"{m['name_hits']}/{m['scorable']}"),
+        ("名稱+參數全對率", m["arg_rate"], f"{m['arg_hits']}/{m['scorable']}"),
+        ("呼叫效率", m["efficiency"], "步數貼近預期"),
     ]
-    for label, rate, hit, denom in rows:
-        bar = "█" * int(rate / 5) + "░" * (20 - int(rate / 5))
-        typer.echo(f"  {label:<16} ", nl=False)
-        typer.secho(f"{bar} {rate:>5.1f}%", fg=color(rate), nl=False)
-        typer.echo(f"  ({hit}/{denom})")
-
+    if "readonly_rate" in m:
+        rows.append(("唯讀遵循度", m["readonly_rate"], f"{m['readonly_clean']}/{m['evaluated']}"))
     if m["judge_avg"] is not None:
-        typer.echo(f"  {'Judge 平均分':<16} {m['judge_avg']}/100  ({m['judged']} 題已評分)")
+        rows.append(("呈現品質（judge）", m["judge_avg"], f"{m['judged']} 題已評分"))
+
+    for label, rate, note in rows:
+        bar = "█" * int(rate / 5) + "░" * (20 - int(rate / 5))
+        typer.echo(f"  {_pad(label, 18)} ", nl=False)
+        typer.secho(f"{bar} {rate:>5.1f}%", fg=_rate_color(rate), nl=False)
+        typer.echo(f"  ({note})")
+
+    if m.get("readonly_violations"):
+        offenders = ", ".join(f"{k}×{v}" for k, v in m["readonly_violations"].items())
+        typer.secho(f"  ⚠️  呼叫到非唯讀工具：{offenders}", fg=typer.colors.YELLOW)
 
     typer.secho(
         "  正確率採子集判定：預期工具全部出現即算命中，額外的偵察呼叫不扣分。",
         fg=typer.colors.BRIGHT_BLACK,
     )
     return m
+
+
+def _resolve_readonly_tools(mcp, header, token):
+    """Fetch the MCP tool list and return the names flagged readOnlyHint."""
+    if not mcp:
+        return None
+
+    headers = parse_header_args(header)
+    if token:
+        headers.setdefault("Authorization", f"Bearer {token}")
+
+    context = fetch_mcp_context(mcp, headers=headers)
+    if context.startswith("Error") or context.startswith("Failed"):
+        typer.secho(f"⚠️  無法取得 MCP 工具清單，略過唯讀遵循度：{context}", fg=typer.colors.YELLOW)
+        return None
+
+    readonly = extract_readonly_tools(context)
+    typer.echo(f"🔒 從 MCP 取得 {len(readonly)} 個唯讀工具，將計算唯讀遵循度。")
+    return readonly
 
 # Create the Typer app
 cli = typer.Typer(
@@ -221,49 +323,8 @@ def run_exp(
     typer.echo("=" * 60)
     
     total = len(exp.testCases)
-    passed = 0
-    
-    for i, case in enumerate(exp.testCases):
-        typer.echo(f"[{i+1}/{total}] Q: {case.q}")
-        req = EvalRequest(
-            app_name=case.appName, api_url=exp.apiUrl, user_id=exp.userId,
-            question=case.q, state=case.state
-        )
-        result = run_single_test(req)
-        
-        case.actualTools = result.get("tools", "")
-        case.actualAnswer = result.get("answer", "")
-        case.rawResponse = result.get("raw_response")
-        
-        # 1. Traditional Match
-        tools_match = compare_tools(case.expectedTools, case.actualTools, verify_args=verify_args)
-        
-        if tools_match:
-            typer.secho("  ✅ Tools Match", fg=typer.colors.GREEN)
-            passed += 1
-            case.status = 'PASS'
-        else:
-            typer.secho(f"  ❌ Tools Mismatch", fg=typer.colors.RED)
-            case.status = 'FAIL'
-        
-        # 2. LLM Judging
-        if judge:
-            with typer.progressbar(length=1, label="  ⚖️ Judging...") as progress:
-                judgement = judge_test_case(case, api_key, model=judge_model)
-                progress.update(1)
-            
-            case.judgeScore = judgement["score"]
-            case.judgeExplanation = judgement["explanation"]
-            
-            color = typer.colors.GREEN if case.judgeScore >= 80 else (typer.colors.YELLOW if case.judgeScore >= 50 else typer.colors.RED)
-            typer.secho(f"  ⚖️ Judge Score: {case.judgeScore}/100", fg=color, bold=True)
-            typer.echo(f"     Reason: {case.judgeExplanation}")
+    passed = _execute_experiment(exp, verify_args, judge, judge_model, api_key)
 
-        typer.echo(f"  A: {case.actualAnswer[:100]}..." if len(case.actualAnswer) > 100 else f"  A: {case.actualAnswer}")
-        typer.echo("-" * 40)
-    
-    save_experiment_data(exp)
-    
     typer.echo("\n" + "=" * 60)
     typer.secho("📊 EXPERIMENT SUMMARY", fg=typer.colors.MAGENTA, bold=True)
     typer.echo(f"Total: {total} | Passed: {passed} | Failed: {total-passed}")
@@ -276,6 +337,9 @@ def run_exp(
 @cli.command(name="stats")
 def stats_exp(
     exp_id: str = typer.Argument(..., help="ID of the experiment"),
+    mcp: str = typer.Option(None, "--mcp", "-m", help="MCP server URL, used to score read-only compliance"),
+    header: Optional[List[str]] = typer.Option(None, "--header", "-H", help="Extra MCP header as 'Key: Value'"),
+    token: str = typer.Option(None, "--token", envvar="MCP_AUTH_TOKEN", help="Bearer token for the MCP server"),
     json_out: bool = typer.Option(False, "--json", help="Emit raw JSON instead of a table")
 ):
     """
@@ -286,13 +350,140 @@ def stats_exp(
         typer.secho(f"❌ Error: Experiment '{exp_id}' not found.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
+    readonly_tools = _resolve_readonly_tools(mcp, header, token)
+
     if json_out:
-        typer.echo(json.dumps(compute_metrics(exp), indent=2, ensure_ascii=False))
+        typer.echo(json.dumps(compute_metrics(exp, readonly_tools), indent=2, ensure_ascii=False))
         return
 
     typer.secho(f"Experiment: {exp.name} ({exp.id})", bold=True)
     typer.echo("-" * 60)
-    _print_metrics(exp)
+    _print_metrics(exp, readonly_tools)
+
+
+@cli.command(name="benchmark")
+def benchmark_exp(
+    exp_id: str = typer.Argument(..., help="ID of the experiment holding the dataset"),
+    app: Optional[List[str]] = typer.Option(
+        None, "--app", "-a",
+        help="App (model) to benchmark. Repeat for each model; defaults to every app the Agent API exposes."
+    ),
+    verify_args: bool = typer.Option(False, "--verify-args/--no-verify-args", help="Whether tool-arg equality decides PASS/FAIL"),
+    judge: bool = typer.Option(True, "--judge/--no-judge", help="Score presentation quality with an LLM judge"),
+    judge_model: str = typer.Option("gemini-3-flash-preview", "--judge-model", help="Gemini model used for judging"),
+    mcp: str = typer.Option(None, "--mcp", "-m", help="MCP server URL, used to score read-only compliance"),
+    header: Optional[List[str]] = typer.Option(None, "--header", "-H", help="Extra MCP header as 'Key: Value'"),
+    token: str = typer.Option(None, "--token", envvar="MCP_AUTH_TOKEN", help="Bearer token for the MCP server"),
+    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key for judging")
+):
+    """
+    🕸️  [bold magenta]Run one dataset against several models and compare them.[/bold magenta]
+
+    Each model runs as its own experiment named '<dataset> @ <app>', so the
+    per-case traces stay inspectable in the UI and the radar chart can overlay them.
+    """
+    source = get_experiment(exp_id)
+    if not source:
+        typer.secho(f"❌ Error: Experiment '{exp_id}' not found.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    apps = list(app or [])
+    if not apps:
+        try:
+            res = request_with_retry("GET", f"{source.apiUrl}/list-apps", timeout=10)
+            apps = res.json()
+        except Exception as e:
+            typer.secho(f"❌ 無法從 {source.apiUrl}/list-apps 取得 app 清單：{e}", fg=typer.colors.RED)
+            raise typer.Exit(1)
+
+    if len(apps) < 2:
+        typer.secho("⚠️  只有一個 app，比較意義有限。", fg=typer.colors.YELLOW)
+
+    readonly_tools = _resolve_readonly_tools(mcp, header, token)
+
+    typer.secho(f"🕸️  Benchmark: {source.name} ({len(source.testCases)} cases)", fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"🔗 API URL: {source.apiUrl}")
+    typer.echo(f"🤖 受測 app：{', '.join(apps)}")
+    typer.echo("=" * 72)
+
+    results = []
+    for app_name in apps:
+        # Fresh experiment per model: same questions, same expectations, new appName.
+        run = Experiment(
+            id='exp_' + uuid.uuid4().hex[:9],
+            name=f"{source.name} @ {app_name}",
+            userId=source.userId,
+            apiUrl=source.apiUrl,
+            testCases=[
+                TestCase(
+                    appName=app_name,
+                    q=c.q,
+                    expectedTools=c.expectedTools,
+                    expectedAnswer=c.expectedAnswer,
+                    state=c.state,
+                )
+                for c in source.testCases
+            ],
+        )
+
+        typer.secho(f"\n▶️  {app_name}", fg=typer.colors.CYAN, bold=True)
+        _execute_experiment(run, verify_args, judge, judge_model, api_key, quiet=True)
+        metrics = compute_metrics(run, readonly_tools=readonly_tools)
+        results.append({"app": app_name, "exp": run, "metrics": metrics})
+        typer.echo(f"  → {run.id}  pass {metrics['pass_rate']}%  名稱 {metrics['name_rate']}%  參數 {metrics['arg_rate']}%")
+
+    _print_benchmark_table(results)
+    return results
+
+
+def _print_benchmark_table(results):
+    """Comparison table plus the radar profile each model scored."""
+    typer.echo("\n" + "=" * 72)
+    typer.secho("🕸️  MODEL COMPARISON", fg=typer.colors.MAGENTA, bold=True)
+    typer.echo("=" * 72)
+
+    axes = [(key, label) for key, label in RADAR_AXES
+            if any(key in r["metrics"] for r in results)]
+
+    width = max(len(r["app"]) for r in results) + 3
+    label_w = 20
+    header = _pad("指標", label_w) + "".join(f"{r['app']:>{width}}" for r in results)
+    typer.secho(header, bold=True)
+    typer.echo("-" * len(header))
+
+    for key, label in axes:
+        row = _pad(label, label_w)
+        best = max((r["metrics"].get(key, 0) for r in results), default=0)
+        typer.echo(row, nl=False)
+        for r in results:
+            val = r["metrics"].get(key)
+            cell = "—" if val is None else f"{val:.1f}%"
+            style = typer.style(f"{cell:>{width}}", fg=typer.colors.GREEN, bold=True) \
+                if val is not None and val == best and len(results) > 1 else f"{cell:>{width}}"
+            typer.echo(style, nl=False)
+        typer.echo()
+
+    typer.echo("-" * len(header))
+    typer.echo(_pad("綜合（軸平均）", label_w), nl=False)
+    scores = []
+    for r in results:
+        profile = radar_profile(r["metrics"])
+        avg = sum(profile.values()) / len(profile) if profile else 0
+        scores.append(avg)
+    best_avg = max(scores) if scores else 0
+    for r, avg in zip(results, scores):
+        cell = f"{avg:.1f}%"
+        style = typer.style(f"{cell:>{width}}", fg=typer.colors.GREEN, bold=True) \
+            if avg == best_avg and len(results) > 1 else f"{cell:>{width}}"
+        typer.echo(style, nl=False)
+    typer.echo("\n")
+
+    for r in results:
+        if r["metrics"].get("readonly_violations"):
+            offenders = ", ".join(f"{k}×{v}" for k, v in r["metrics"]["readonly_violations"].items())
+            typer.secho(f"⚠️  {r['app']} 呼叫到非唯讀工具：{offenders}", fg=typer.colors.YELLOW)
+
+    typer.secho("\n在 UI 的 BENCHMARK 分頁可以把這些實驗疊成雷達圖。", fg=typer.colors.BRIGHT_BLACK)
 
 @cli.command(name="gendata")
 def gendata(

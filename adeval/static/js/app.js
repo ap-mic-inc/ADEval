@@ -121,6 +121,159 @@ createApp({
             };
         });
 
+        // --- Benchmark / radar ---------------------------------------------
+
+        const RADAR_COLORS = [
+            '#6366f1', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6', '#06b6d4',
+            '#ec4899', '#84cc16'
+        ];
+
+        // Benchmark compares experiments against each other, so it is a global
+        // view rather than a tab belonging to the currently selected experiment.
+        const view = ref('experiment');
+
+        const benchmark = ref({
+            selected: [],
+            axes: [],
+            results: [],
+            mcpUrl: '',
+            mcpToken: '',
+            isLoading: false,
+            error: ''
+        });
+
+        const openBenchmark = () => {
+            view.value = 'benchmark';
+            // Default to comparing everything that looks like a benchmark run.
+            if (!benchmark.value.selected.length) {
+                benchmark.value.selected = experiments.value
+                    .filter(e => e.name && e.name.includes(' @ '))
+                    .map(e => e.id);
+            }
+            loadBenchmark();
+        };
+
+        const openExperimentView = () => { view.value = 'experiment'; };
+
+        const toggleBenchmarkExp = (id) => {
+            const idx = benchmark.value.selected.indexOf(id);
+            if (idx === -1) benchmark.value.selected.push(id);
+            else benchmark.value.selected.splice(idx, 1);
+            loadBenchmark();
+        };
+
+        const loadBenchmark = async () => {
+            if (!benchmark.value.selected.length) {
+                benchmark.value.results = [];
+                return;
+            }
+            benchmark.value.isLoading = true;
+            benchmark.value.error = '';
+            try {
+                const data = await fetchMetricsApi({
+                    expIds: benchmark.value.selected,
+                    mcpUrl: benchmark.value.mcpUrl || undefined,
+                    mcpToken: benchmark.value.mcpToken || undefined
+                });
+                if (data.detail) throw new Error(data.detail);
+                benchmark.value.axes = data.axes || [];
+                benchmark.value.results = data.results || [];
+            } catch (e) {
+                benchmark.value.error = e.message || '無法取得指標';
+                benchmark.value.results = [];
+            } finally {
+                benchmark.value.isLoading = false;
+            }
+        };
+
+        // Axes are only drawn when at least one selected model has a value for
+        // them -- read-only compliance is absent unless an MCP URL was supplied.
+        const radarAxes = computed(() => {
+            const present = new Set();
+            for (const r of benchmark.value.results) {
+                Object.keys(r.radar || {}).forEach(k => present.add(k));
+            }
+            return benchmark.value.axes.filter(a => present.has(a));
+        });
+
+        // The viewBox is wider than tall so the axis labels, which stick out
+        // horizontally, stay inside it -- the SVG must not need overflow:visible
+        // or the polygon bleeds over the card it sits in.
+        const RADAR_W = 620;
+        const RADAR_H = 440;
+        const RADAR_CX = RADAR_W / 2;
+        const RADAR_CY = RADAR_H / 2;
+        const RADAR_R = 150;
+        const RADAR_LABEL_GAP = 34;
+
+        const radarPoint = (axisIndex, radius) => {
+            const n = radarAxes.value.length || 1;
+            // Start at 12 o'clock and go clockwise.
+            const angle = (Math.PI * 2 * axisIndex) / n - Math.PI / 2;
+            return {
+                x: RADAR_CX + radius * Math.cos(angle),
+                y: RADAR_CY + radius * Math.sin(angle)
+            };
+        };
+
+        const radarValuePoint = (axisIndex, value) =>
+            radarPoint(axisIndex, (Math.max(0, Math.min(100, value)) / 100) * RADAR_R);
+
+        const radarRings = computed(() => {
+            const n = radarAxes.value.length;
+            if (n < 3) return [];
+            return [20, 40, 60, 80, 100].map(pct => ({
+                pct,
+                labelY: RADAR_CY - (pct / 100) * RADAR_R,
+                points: radarAxes.value
+                    .map((_, i) => radarValuePoint(i, pct))
+                    .map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+                    .join(' ')
+            }));
+        });
+
+        const radarSpokes = computed(() =>
+            radarAxes.value.map((label, i) => {
+                const end = radarValuePoint(i, 100);
+                const labelPos = radarPoint(i, RADAR_R + RADAR_LABEL_GAP);
+                const dx = labelPos.x - RADAR_CX;
+                return {
+                    label,
+                    x2: end.x, y2: end.y,
+                    lx: labelPos.x, ly: labelPos.y,
+                    anchor: Math.abs(dx) < 8 ? 'middle' : (dx > 0 ? 'start' : 'end')
+                };
+            })
+        );
+
+        const radarSeries = computed(() =>
+            benchmark.value.results.map((r, idx) => {
+                const color = RADAR_COLORS[idx % RADAR_COLORS.length];
+                const pts = radarAxes.value.map((axis, i) => radarValuePoint(i, r.radar?.[axis] ?? 0));
+                const values = radarAxes.value.map(a => r.radar?.[a] ?? 0);
+                const avg = values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
+                return {
+                    id: r.id,
+                    label: r.appName || r.name,
+                    name: r.name,
+                    color,
+                    avg: Math.round(avg * 10) / 10,
+                    metrics: r.metrics,
+                    radar: r.radar,
+                    dots: pts,
+                    points: pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+                };
+            })
+        );
+
+        const radarBest = computed(() => {
+            const best = {};
+            for (const axis of radarAxes.value) {
+                best[axis] = Math.max(...radarSeries.value.map(s => s.radar?.[axis] ?? 0), 0);
+            }
+            return best;
+        });
+
         const updateThemeClass = (val) => {
             if (val) {
                 document.documentElement.classList.add('dark');
@@ -197,6 +350,7 @@ createApp({
         };
 
         const loadExperiment = (exp) => {
+            view.value = 'experiment';
             currentExp.value = JSON.parse(JSON.stringify(exp));
             config.value.userId = exp.userId || 'eval-user';
             config.value.apiUrl = exp.apiUrl || 'http://localhost:8000';
@@ -431,6 +585,10 @@ createApp({
         return { 
             tab, isSidebarOpen, isDark, isFetching, saveStatus, config, apps, experiments, currentExp, testCases, evalStats, single, isRunning, isComparing, progress, compare,
             isGenerating, showGenerateModal, genConfig, generateExperiment,
+            view, openBenchmark, openExperimentView,
+            benchmark, toggleBenchmarkExp, loadBenchmark,
+            radarAxes, radarRings, radarSpokes, radarSeries, radarBest,
+            radarW: RADAR_W, radarH: RADAR_H, radarCx: RADAR_CX, radarCy: RADAR_CY,
             toggleTheme, toggleSidebar, fetchApps, addCase, removeCase, runSingle, runAll, runComparison,
             handleFileUpload, exportQuestionBank, exportResults,
             createNewExperiment, loadExperiment, saveCurrentExperiment, deleteExperiment, copyTrace

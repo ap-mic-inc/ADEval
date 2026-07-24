@@ -41,6 +41,40 @@ adeval config --url "http://localhost:8000" --user "dev_01"
 ### `adeval delete <EXP_ID>`
 永久刪除實驗數據。
 
+### `adeval stats <EXP_ID>`
+顯示已執行實驗的工具使用指標。
+- `--mcp`、`-m`：MCP server URL。提供後會讀取工具的 `readOnlyHint`，額外計算唯讀遵循度。
+- `--header`、`-H` / `--token`：連線 MCP server 的認證資訊。
+- `--json`：輸出原始 JSON，方便接後續處理。
+
+指標定義：
+
+| 指標 | 定義 |
+| --- | --- |
+| 有工具呼叫率 | 實際解析到 functionCall 的題數／已執行題數 |
+| 函式名正確率 | 預期工具名稱全部出現在實際呼叫中的題數／有填 Expected Tools 的題數 |
+| 名稱+參數全對率 | 同上，但連參數也要相符 |
+| 呼叫效率 | 實際呼叫次數與預期次數的接近程度（多呼叫、少呼叫都會扣分） |
+| 唯讀遵循度 | 完全沒碰到非唯讀工具的題數／已執行題數 |
+| 呈現品質 | LLM judge 平均分 |
+
+正確率一律採**子集判定**：預期工具全部出現即算命中，模型額外的偵察呼叫不扣分。這與 `run` 的 PASS/FAIL（集合完全相等）不同——後者會把「先 list 再 inspect」這種合理行為判為失敗。
+
+### `adeval benchmark <EXP_ID>`
+用同一份資料集比較多個模型，每個模型各存成一個名為 `<資料集> @ <app>` 的實驗。
+- `--app`、`-a`：要比較的 app（模型），可重複指定；不給則自動抓 `/list-apps` 的全部。
+- `--mcp`、`-m` / `--header` / `--token`：同 `stats`，用來計算唯讀遵循度。
+- `--judge / --no-judge`：是否用 LLM judge 評分（預設開啟）。
+- `--verify-args / --no-verify-args`：PASS/FAIL 是否要求參數相等（預設不要求）。
+
+```bash
+adeval benchmark exp_abc123 \
+  --app gemini_3_flash_preview --app gemini_3_6_flash \
+  --mcp http://127.0.0.1:8000/mcp --token "$MY_MCP_TOKEN"
+```
+
+跑完會印出各指標的並排比較表，並可在 Web UI 的 **BENCHMARK** 分頁勾選這些實驗，疊成雷達圖。
+
 ## 資料生成
 
 ### `adeval gendata --mcp <MCP_URL>`
