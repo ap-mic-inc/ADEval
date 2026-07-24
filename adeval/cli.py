@@ -10,8 +10,42 @@ from .core import (
     delete_experiment_data, EvalRequest, save_experiment_data,
     get_config, save_config, import_csv, export_to_csv, GlobalConfig,
     compare_tools, fetch_mcp_context, generate_test_cases, Experiment, uuid,
-    judge_test_case, parse_header_args
+    judge_test_case, parse_header_args, compute_metrics
 )
+
+
+def _print_metrics(exp):
+    """Render the tool-use metrics block shared by `run` and `stats`."""
+    m = compute_metrics(exp)
+    if not m["evaluated"]:
+        typer.secho("尚未執行任何測試案例，無指標可計算。", fg=typer.colors.YELLOW)
+        return m
+
+    def color(rate):
+        return typer.colors.GREEN if rate >= 80 else (
+            typer.colors.YELLOW if rate >= 50 else typer.colors.RED
+        )
+
+    typer.secho("🛠️  TOOL-USE METRICS", fg=typer.colors.CYAN, bold=True)
+    rows = [
+        ("有工具呼叫率", m["call_rate"], m["called"], m["evaluated"]),
+        ("函式名正確率", m["name_rate"], m["name_hits"], m["scorable"]),
+        ("名稱+參數全對率", m["arg_rate"], m["arg_hits"], m["scorable"]),
+    ]
+    for label, rate, hit, denom in rows:
+        bar = "█" * int(rate / 5) + "░" * (20 - int(rate / 5))
+        typer.echo(f"  {label:<16} ", nl=False)
+        typer.secho(f"{bar} {rate:>5.1f}%", fg=color(rate), nl=False)
+        typer.echo(f"  ({hit}/{denom})")
+
+    if m["judge_avg"] is not None:
+        typer.echo(f"  {'Judge 平均分':<16} {m['judge_avg']}/100  ({m['judged']} 題已評分)")
+
+    typer.secho(
+        "  正確率採子集判定：預期工具全部出現即算命中，額外的偵察呼叫不扣分。",
+        fg=typer.colors.BRIGHT_BLACK,
+    )
+    return m
 
 # Create the Typer app
 cli = typer.Typer(
@@ -235,7 +269,30 @@ def run_exp(
     typer.echo(f"Total: {total} | Passed: {passed} | Failed: {total-passed}")
     pass_rate = (passed / total) * 100 if total > 0 else 0
     typer.secho(f"Pass Rate: {pass_rate:.2f}%", bold=True, reverse=True)
+    typer.echo("-" * 60)
+    _print_metrics(exp)
     typer.echo("=" * 60)
+
+@cli.command(name="stats")
+def stats_exp(
+    exp_id: str = typer.Argument(..., help="ID of the experiment"),
+    json_out: bool = typer.Option(False, "--json", help="Emit raw JSON instead of a table")
+):
+    """
+    📊 [bold magenta]Show tool-use metrics for an already-executed experiment.[/bold magenta]
+    """
+    exp = get_experiment(exp_id)
+    if not exp:
+        typer.secho(f"❌ Error: Experiment '{exp_id}' not found.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if json_out:
+        typer.echo(json.dumps(compute_metrics(exp), indent=2, ensure_ascii=False))
+        return
+
+    typer.secho(f"Experiment: {exp.name} ({exp.id})", bold=True)
+    typer.echo("-" * 60)
+    _print_metrics(exp)
 
 @cli.command(name="gendata")
 def gendata(

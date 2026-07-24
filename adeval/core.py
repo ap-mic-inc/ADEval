@@ -295,8 +295,69 @@ def compare_tools(expected_str: str, actual_str: str, verify_args: bool = True) 
     
     exp_normalized = {normalize_tool(t) for t in expected_list}
     act_normalized = {normalize_tool(t) for t in actual_list}
-    
+
     return exp_normalized == act_normalized
+
+def _split_tools(value: Optional[str]) -> List[str]:
+    return [t.strip() for t in (value or "").split("\n") if t.strip()]
+
+def has_tool_call(case: TestCase) -> bool:
+    """
+    Whether a functionCall was actually parsed out of the agent's event stream.
+    'None' means the model answered from its own knowledge; 'Error' means the
+    request never reached the agent.
+    """
+    actual = (case.actualTools or "").strip()
+    return bool(actual) and actual not in ("None", "Error")
+
+def compute_metrics(exp: Experiment) -> Dict[str, Any]:
+    """
+    Tool-use metrics for an experiment, scored with SUBSET semantics: a case
+    counts as a hit when every expected tool appears among the actual calls.
+    Extra calls (e.g. list_containers to resolve a name before acting) do not
+    fail the case -- that is legitimate agent behaviour, not an error.
+
+    This deliberately differs from compare_tools(), which requires set equality
+    and therefore penalises correct-but-exploratory tool use.
+    """
+    evaluated = [c for c in exp.testCases if c.status]
+    called = [c for c in evaluated if has_tool_call(c)]
+    scorable = [c for c in evaluated if _split_tools(c.expectedTools)]
+
+    name_hits = 0
+    arg_hits = 0
+    for case in scorable:
+        expected = _split_tools(case.expectedTools)
+        actual = _split_tools(case.actualTools)
+
+        actual_names = {t.split("(")[0].strip().lower() for t in actual}
+        if all(e.split("(")[0].strip().lower() in actual_names for e in expected):
+            name_hits += 1
+
+        actual_full = {normalize_tool(t) for t in actual}
+        if all(normalize_tool(e) in actual_full for e in expected):
+            arg_hits += 1
+
+    def pct(n: int, d: int) -> float:
+        return round((n / d) * 100, 1) if d else 0.0
+
+    judged = [c.judgeScore for c in exp.testCases if c.judgeScore is not None]
+
+    return {
+        "total": len(exp.testCases),
+        "evaluated": len(evaluated),
+        "scorable": len(scorable),
+        "passed": sum(1 for c in evaluated if c.status == "PASS"),
+        "pass_rate": pct(sum(1 for c in evaluated if c.status == "PASS"), len(evaluated)),
+        "called": len(called),
+        "call_rate": pct(len(called), len(evaluated)),
+        "name_hits": name_hits,
+        "name_rate": pct(name_hits, len(scorable)),
+        "arg_hits": arg_hits,
+        "arg_rate": pct(arg_hits, len(scorable)),
+        "judged": len(judged),
+        "judge_avg": round(sum(judged) / len(judged), 1) if judged else None,
+    }
 
 # --- Generation Logic ---
 

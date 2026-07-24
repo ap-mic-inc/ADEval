@@ -248,6 +248,26 @@
                                             <span class="text-[10px] font-black uppercase tracking-wider">{{ evalStats.fail }} / {{ evalStats.total }} Fail ({{ evalStats.failRate }}%)</span>
                                         </div>
                                     </div>
+                                    <div v-if="!isRunning && evalStats.evaluated > 0" class="grid grid-cols-3 gap-3 mt-5 max-w-2xl">
+                                        <div class="bg-white/10 rounded-xl px-4 py-3">
+                                            <div class="text-[9px] font-black uppercase tracking-widest opacity-70">有工具呼叫率</div>
+                                            <div class="text-2xl font-black leading-tight mt-1">{{ evalStats.calledRate }}%</div>
+                                            <div class="text-[10px] font-bold opacity-60">{{ evalStats.called }} / {{ evalStats.evaluated }} 題有呼叫工具</div>
+                                        </div>
+                                        <div class="bg-white/10 rounded-xl px-4 py-3">
+                                            <div class="text-[9px] font-black uppercase tracking-widest opacity-70">函式名正確率</div>
+                                            <div class="text-2xl font-black leading-tight mt-1">{{ evalStats.nameRate }}%</div>
+                                            <div class="text-[10px] font-bold opacity-60">{{ evalStats.nameHit }} / {{ evalStats.scorable }} 題命中預期工具</div>
+                                        </div>
+                                        <div class="bg-white/10 rounded-xl px-4 py-3">
+                                            <div class="text-[9px] font-black uppercase tracking-widest opacity-70">名稱+參數全對率</div>
+                                            <div class="text-2xl font-black leading-tight mt-1">{{ evalStats.argRate }}%</div>
+                                            <div class="text-[10px] font-bold opacity-60">{{ evalStats.argHit }} / {{ evalStats.scorable }} 題參數也相符</div>
+                                        </div>
+                                    </div>
+                                    <p v-if="!isRunning && evalStats.evaluated > 0" class="text-[10px] font-bold opacity-50 mt-2 max-w-2xl">
+                                        正確率採子集判定：預期工具全部出現即算命中，模型額外呼叫的偵察步驟不扣分。分母為有填 Expected Tools 的已執行題目。
+                                    </p>
                                 </div>
                                 <div class="flex space-x-2">
                                     <button @click="runAll" :disabled="isRunning" class="bg-white dark:bg-gray-100 text-indigo-600 p-4 rounded-xl hover:scale-105 transition active:scale-95 disabled:opacity-50 shadow-lg">

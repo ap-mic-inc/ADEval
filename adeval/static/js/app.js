@@ -42,20 +42,82 @@ createApp({
 
         const testCases = computed(() => currentExp.value ? currentExp.value.testCases : []);
 
+        // Normalize a single tool call string so 'Add(b="1", a=2)' and 'add(a=2, b=1)'
+        // compare equal. Shared by the run loop and the metrics below.
+        const normalizeTool = (t) => {
+            const match = t.match(/^([^(]+)\((.*)\)$/);
+            if (!match) return t.trim().toLowerCase();
+            const name = match[1].trim().toLowerCase();
+            const normalizeArg = (a) => {
+                const eqIdx = a.indexOf('=');
+                if (eqIdx === -1) return a;
+                const k = a.slice(0, eqIdx).trim();
+                const v = a.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+                return `${k}=${v}`;
+            };
+            const args = match[2].split(',').map(a => normalizeArg(a.trim().toLowerCase())).filter(a => a);
+            args.sort();
+            return args.length ? `${name}(${args.join(', ')})` : name;
+        };
+
+        const toolName = (t) => t.split('(')[0].trim().toLowerCase();
+        const splitTools = (s) => (s || '').split('\n').map(t => t.trim()).filter(t => t);
+
+        // A case counts as "called a tool" only when the runner actually parsed a
+        // functionCall out of the event stream. 'None' means the model answered from
+        // its own knowledge; 'Error' means the request never reached the agent.
+        const hasToolCall = (c) => {
+            const raw = (c.actualTools || '').trim();
+            return !!raw && raw !== 'None' && raw !== 'Error';
+        };
+
         const evalStats = computed(() => {
             const cases = testCases.value;
             const total = cases.length;
             const pass = cases.filter(c => c.status === 'PASS').length;
             const fail = cases.filter(c => c.status === 'FAIL').length;
             const pending = cases.filter(c => !c.status).length;
-            
+
+            // Metrics are only meaningful for cases that have been run.
+            const evaluated = cases.filter(c => c.status);
+            const called = evaluated.filter(hasToolCall).length;
+
+            // Accuracy is scored only against cases that declare expected tools.
+            const scorable = evaluated.filter(c => splitTools(c.expectedTools).length > 0);
+
+            let nameHit = 0;
+            let argHit = 0;
+            for (const c of scorable) {
+                const expected = splitTools(c.expectedTools);
+                const actual = splitTools(c.actualTools);
+
+                // Subset semantics: every expected tool must appear among the actual
+                // calls. Extra calls (e.g. list_containers to locate a name first) do
+                // not fail the case — that is legitimate agent behaviour, not an error.
+                const actualNames = new Set(actual.map(toolName));
+                if (expected.every(e => actualNames.has(toolName(e)))) nameHit++;
+
+                const actualFull = new Set(actual.map(normalizeTool));
+                if (expected.every(e => actualFull.has(normalizeTool(e)))) argHit++;
+            }
+
+            const pct = (n, d) => d > 0 ? Math.round((n / d) * 100) : 0;
+
             return {
                 total,
                 pass,
                 fail,
                 pending,
-                passRate: total > 0 ? Math.round((pass / total) * 100) : 0,
-                failRate: total > 0 ? Math.round((fail / total) * 100) : 0
+                passRate: pct(pass, total),
+                failRate: pct(fail, total),
+                evaluated: evaluated.length,
+                scorable: scorable.length,
+                called,
+                calledRate: pct(called, evaluated.length),
+                nameHit,
+                nameRate: pct(nameHit, scorable.length),
+                argHit,
+                argRate: pct(argHit, scorable.length)
             };
         });
 
@@ -212,24 +274,8 @@ createApp({
             progress.value = 0;
             const cases = currentExp.value.testCases;
 
-            const normalizeTool = (t) => {
-                const match = t.match(/^([^(]+)\((.*)\)$/);
-                if (!match) return t.trim().toLowerCase();
-                const name = match[1].trim().toLowerCase();
-                const normalizeArg = (a) => {
-                    const eqIdx = a.indexOf('=');
-                    if (eqIdx === -1) return a;
-                    const k = a.slice(0, eqIdx).trim();
-                    const v = a.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
-                    return `${k}=${v}`;
-                };
-                const args = (match[2] || '').split(',')
-                    .map(a => normalizeArg(a.trim().toLowerCase()))
-                    .filter(a => a)
-                    .sort()
-                    .join(', ');
-                return `${name}(${args})`;
-            };
+            // normalizeTool is shared with evalStats so the live run and the
+            // reported metrics cannot drift apart.
 
             try {
                 for (let i = 0; i < cases.length; i++) {
