@@ -304,7 +304,8 @@
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-40 text-center">Actual Tools</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-64 text-center">Actual Answer</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-32 text-center">Status</th>
-                                        <th class="px-6 py-5 border-b dark:border-gray-800 w-48 text-center">LLM Judge</th>
+                                        <th class="px-6 py-5 border-b dark:border-gray-800 w-48 text-center">呈現品質</th>
+                                        <th class="px-6 py-5 border-b dark:border-gray-800 w-48 text-center">答案正確率</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-24 text-center">Trace</th>
                                         <th class="px-6 py-5 border-b dark:border-gray-800 w-12 text-center"></th>
                                     </tr>
@@ -341,6 +342,17 @@
                                                 <div v-if="case_.judgeScore !== undefined && case_.judgeScore !== null" class="space-y-1">
                                                     <div :class="case_.judgeScore >= 80 ? 'text-emerald-500' : (case_.judgeScore >= 50 ? 'text-amber-500' : 'text-rose-500')" class="font-black text-sm">{{ case_.judgeScore }}/100</div>
                                                     <div class="text-[10px] text-gray-400 leading-tight">{{ case_.judgeExplanation }}</div>
+                                                </div>
+                                                <span v-else class="text-gray-300 dark:text-gray-700 italic text-[10px]">-</span>
+                                            </td>
+                                            <!-- 事實正確性與呈現分開列：格式漂亮但數字錯的回覆，
+                                                 兩欄會一高一低，落差本身就是要看的訊號。 -->
+                                            <td class="px-6 py-4 align-top text-center">
+                                                <div v-if="case_.answerScore !== undefined && case_.answerScore !== null" class="space-y-1">
+                                                    <div :class="case_.answerScore >= 80 ? 'text-emerald-500' : (case_.answerScore >= 50 ? 'text-amber-500' : 'text-rose-500')" class="font-black text-sm">{{ case_.answerScore }}/100</div>
+                                                    <div v-if="case_.judgeScore !== null && case_.judgeScore - case_.answerScore >= 50"
+                                                        class="text-[9px] font-black text-rose-500 uppercase tracking-widest">講得好但答錯</div>
+                                                    <div class="text-[10px] text-gray-400 leading-tight">{{ case_.answerExplanation }}</div>
                                                 </div>
                                                 <span v-else class="text-gray-300 dark:text-gray-700 italic text-[10px]">-</span>
                                             </td>
@@ -484,16 +496,60 @@
                     <div class="bg-white dark:bg-darkcard p-8 rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm transition-theme">
                         <div class="flex items-start justify-between flex-wrap gap-6">
                             <div>
-                                <h3 class="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest mb-2">選擇要比較的實驗</h3>
-                                <p class="text-xs text-gray-400 dark:text-gray-600 font-bold mb-4">每個模型跑完會存成一個實驗，勾選後疊在同一張雷達圖上。</p>
-                                <div class="flex flex-wrap gap-2 max-w-3xl">
-                                    <button v-for="exp in experiments" :key="exp.id" @click="toggleBenchmarkExp(exp.id)"
-                                        :class="benchmark.selected.includes(exp.id) ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-gray-50 dark:bg-gray-900 text-gray-500 dark:text-gray-400 border-gray-100 dark:border-gray-800'"
-                                        class="px-4 py-2 rounded-xl border-2 text-xs font-black transition-all hover:scale-105 active:scale-95">
-                                        <i :class="benchmark.selected.includes(exp.id) ? 'fa-check-square' : 'fa-square'" class="far mr-2"></i>{{ exp.name }}
-                                    </button>
+                                <div class="flex items-center flex-wrap gap-3 mb-2">
+                                    <h3 class="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">選擇要比較的實驗</h3>
+                                    <span class="text-[10px] font-black text-gray-400">已選 {{ benchmark.selected.length }} / {{ benchmarkGrid.total }}</span>
+                                    <button @click="selectAllRuns" class="text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-indigo-500 transition">全選</button>
+                                    <button @click="clearRuns" class="text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-rose-500 transition">清除</button>
                                 </div>
-                                <p v-if="!experiments.length" class="text-xs font-bold text-gray-400">尚無實驗，請先執行 <code class="font-mono">adeval benchmark</code>。</p>
+                                <p class="text-xs text-gray-400 dark:text-gray-600 font-bold mb-4">
+                                    點格子選單一實驗；點<span class="text-indigo-400">模型名</span>選該模型全部測資（看難度梯度），
+                                    點<span class="text-indigo-400">測資名</span>選所有模型（跨模型比較）。
+                                </p>
+
+                                <!-- 矩陣：列＝模型、欄＝測資組。攤平成數十個 chip 時無法快速選出想比較的組合。 -->
+                                <div v-if="benchmarkGrid.total" class="overflow-x-auto">
+                                    <table class="text-xs border-separate" style="border-spacing: 4px">
+                                        <thead>
+                                            <tr>
+                                                <th class="text-left"></th>
+                                                <th v-for="ds in benchmarkGrid.datasets" :key="'h'+ds" class="px-1">
+                                                    <button @click="toggleCol(ds)"
+                                                        :class="colPicked(ds) ? 'text-indigo-500' : 'text-gray-400 hover:text-indigo-400'"
+                                                        class="font-black whitespace-nowrap transition text-[10px]"
+                                                        :title="'選取／取消所有模型的 ' + ds">
+                                                        {{ ds.replace('sqlite-', '') }}
+                                                    </button>
+                                                </th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="m in benchmarkGrid.models" :key="'r'+m">
+                                                <td class="pr-2">
+                                                    <button @click="toggleRow(m)"
+                                                        :class="rowPicked(m) ? 'text-indigo-500' : 'text-gray-500 dark:text-gray-400 hover:text-indigo-400'"
+                                                        class="font-black whitespace-nowrap transition"
+                                                        :title="'選取／取消 ' + m + ' 的所有測資'">
+                                                        {{ m }}
+                                                    </button>
+                                                </td>
+                                                <td v-for="ds in benchmarkGrid.datasets" :key="m+ds" class="text-center">
+                                                    <button v-if="cellId(m, ds)" @click="toggleBenchmarkExp(cellId(m, ds))"
+                                                        :class="isPicked(cellId(m, ds))
+                                                            ? 'bg-indigo-600 border-indigo-600 text-white'
+                                                            : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-800 text-transparent hover:border-indigo-400'"
+                                                        class="w-8 h-8 rounded-lg border-2 transition-all hover:scale-110 active:scale-95"
+                                                        :title="ds + ' @ ' + m">
+                                                        <i class="fas fa-check text-[10px]"></i>
+                                                    </button>
+                                                    <span v-else class="inline-block w-8 h-8 rounded-lg border-2 border-dashed border-gray-100 dark:border-gray-900"
+                                                        title="這個組合沒有跑過"></span>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                                <p v-if="!benchmarkGrid.total" class="text-xs font-bold text-gray-400">尚無實驗，請先執行 <code class="font-mono">adeval benchmark</code>。</p>
                             </div>
                             <div class="w-full md:w-80 space-y-3">
                                 <div>
@@ -510,13 +566,45 @@
                     </div>
 
                     <div v-if="radarSeries.length" class="bg-white dark:bg-darkcard p-8 rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm transition-theme">
-                        <h3 class="text-xl font-black mb-1 text-gray-800 dark:text-gray-100">效能雷達圖 — MCP 工具使用能力</h3>
+                        <div class="flex items-center gap-2 mb-1">
+                            <h3 class="text-xl font-black text-gray-800 dark:text-gray-100">效能雷達圖 — MCP 工具使用能力</h3>
+                            <button @click="showMetricHelp = !showMetricHelp" title="這些指標怎麼算的？"
+                                :class="showMetricHelp ? 'text-indigo-500 border-indigo-400' : 'text-gray-400 border-gray-200 dark:border-gray-700'"
+                                class="w-6 h-6 rounded-full border-2 hover:text-indigo-500 hover:border-indigo-400 transition-all hover:scale-110 active:scale-95 flex items-center justify-center shrink-0">
+                                <i class="fas fa-info text-[10px]"></i>
+                            </button>
+                        </div>
                         <p class="text-xs text-gray-400 dark:text-gray-600 font-bold mb-6">所有軸皆為 0–100%，越外圈越好。<span class="text-indigo-400">點擊任一軸標籤可聚焦該指標並查看各模型排名。</span></p>
+
+                        <!-- Metric definitions: every number on the radar should be traceable
+                             to how it was computed, without leaving the page. -->
+                        <div v-if="showMetricHelp" class="mb-8 rounded-2xl border-2 border-indigo-100 dark:border-indigo-900/50 bg-indigo-50/40 dark:bg-indigo-950/20 p-6">
+                            <div class="flex items-start justify-between mb-3">
+                                <h4 class="text-[10px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-widest">指標計算方式</h4>
+                                <button @click="showMetricHelp = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition">
+                                    <i class="fas fa-times text-xs"></i>
+                                </button>
+                            </div>
+                            <p class="text-xs font-bold text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
+                                全部採<span class="text-indigo-600 dark:text-indigo-400">子集判定</span>：期望的呼叫與參數必須全部滿足，但模型額外做的事（多查一次、多帶一個可選參數）不扣分——那是合理的 agent 行為，改由「呼叫工具次數吻合度」與「額外參數率」分別揭露。
+                            </p>
+                            <div class="grid md:grid-cols-2 gap-x-8 gap-y-4">
+                                <div v-for="m in METRIC_HELP" :key="m.name" class="border-l-2 border-indigo-200 dark:border-indigo-800 pl-3">
+                                    <div class="text-xs font-black text-gray-700 dark:text-gray-200 mb-0.5">{{ m.name }}</div>
+                                    <div class="text-xs font-bold text-gray-500 dark:text-gray-400 leading-relaxed">{{ m.how }}</div>
+                                    <div class="text-[11px] font-bold text-gray-400 dark:text-gray-600 leading-relaxed mt-0.5">{{ m.note }}</div>
+                                </div>
+                            </div>
+                        </div>
 
                         <div class="flex flex-col xl:flex-row gap-8 items-center">
                             <!-- aspect-ratio is set inline: without it the browser falls back to
                                  the 150px default SVG height and the chart renders as a sliver. -->
-                            <svg :viewBox="`0 0 ${radarW} ${radarH}`" preserveAspectRatio="xMidYMid meet"
+                            <!-- .camel 是必要的：這份 template 由瀏覽器解析（in-DOM），
+                                 屬性名會被轉成小寫，:viewBox 會綁成無效的 viewbox。
+                                 SVG 屬性大小寫敏感，少了 viewBox 連 preserveAspectRatio
+                                 也失效，圖形就不隨容器縮放，換個視窗寬度比例就跑掉。 -->
+                            <svg :view-box.camel="`0 0 ${radarW} ${radarH}`" preserveAspectRatio="xMidYMid meet"
                                 class="w-full xl:w-3/5 shrink-0"
                                 :style="{ aspectRatio: `${radarW} / ${radarH}`, height: 'auto', display: 'block' }">
                                 <!-- grid rings + scale labels -->
@@ -564,15 +652,26 @@
                                         class="flex items-center px-5 py-3 border-t dark:border-gray-800">
                                         <span class="w-6 text-xs font-black text-gray-300 dark:text-gray-600">{{ ri + 1 }}</span>
                                         <span class="w-3 h-3 rounded-full mr-3 shrink-0" :style="{ backgroundColor: row.color }"></span>
+                                        <!-- 同一個模型可能跑過多份測資，只顯示模型名會分不出是哪一組，
+                                             因此比照預設圖例補上實驗名稱作為副標。 -->
                                         <div class="flex-1 min-w-0">
-                                            <span class="font-black text-sm text-gray-800 dark:text-gray-100 truncate">{{ row.label }}</span>
-                                            <i v-if="row.isBest" class="fas fa-crown text-amber-400 text-[10px] ml-2"></i>
+                                            <div class="flex items-center min-w-0">
+                                                <span class="font-black text-sm text-gray-800 dark:text-gray-100 truncate">{{ row.label }}</span>
+                                                <i v-if="row.isBest" class="fas fa-crown text-amber-400 text-[10px] ml-2 shrink-0"></i>
+                                            </div>
+                                            <div class="text-[10px] font-bold text-gray-400 truncate">{{ row.name }}</div>
                                         </div>
                                         <!-- inline bar so ranking reads at a glance -->
                                         <div class="hidden sm:block w-24 h-2 rounded-full bg-gray-100 dark:bg-gray-800 mr-3 overflow-hidden">
                                             <div class="h-full rounded-full" :style="{ width: row.value + '%', backgroundColor: row.color }"></div>
                                         </div>
                                         <span class="font-mono font-black text-sm w-14 text-right" :style="{ color: row.color }">{{ row.value.toFixed(1) }}%</span>
+                                    </div>
+                                    <!-- 明講哪些實驗沒有這個指標，避免看的人以為它們被漏掉 -->
+                                    <div v-if="axisDetail.omitted && axisDetail.omitted.length"
+                                        class="px-5 py-3 border-t dark:border-gray-800 text-[10px] font-bold text-gray-400 leading-relaxed">
+                                        <i class="fas fa-info-circle mr-1"></i>
+                                        以下實驗沒有這項指標，故未列入：{{ axisDetail.omitted.join('、') }}
                                     </div>
                                 </div>
 

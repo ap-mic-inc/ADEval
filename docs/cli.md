@@ -37,6 +37,12 @@ Export experiment results to a CSV file for reporting.
 ### `adeval run <EXP_ID>`
 Execute all test cases in an experiment and show a real-time progress and a final summary.
 - `--verbose`: Show full raw response details on failure.
+- `--concurrency`, `-c`: Cases to run in parallel, default 1. Cases are independent
+  (each mints its own session), but this is **only safe against backends that tolerate
+  concurrency** — a self-hosted LiteLLM proxy often serialises requests, and one stuck
+  case then times out every case behind it. Keep it at 1 for those.
+- `--timeout`: Seconds to wait for each `/run` call, default 120. Raise it for slow
+  models or tools that return a lot of data.
 
 ### `adeval delete <EXP_ID>`
 Permanently remove an experiment's data.
@@ -52,9 +58,27 @@ Show tool-use metrics for an experiment that has already been run.
 | Tool-call rate | Cases where a functionCall was parsed / cases run |
 | Function-name accuracy | Cases where every expected tool name appears among the actual calls / cases with Expected Tools |
 | Name+args accuracy | Same, but arguments must match too |
-| Call efficiency | How close the actual number of calls is to the expected one (both over- and under-calling lose points) |
-| Read-only compliance | Cases that touched no write-capable tool / cases run |
-| Presentation quality | Average LLM judge score |
+| Call-count match | How close the actual number of calls is to the expected one (both over- and under-calling lose points). Counts only — a model that explores before acting scores lower simply for taking more steps |
+| Read-only compliance | Cases that did not call a write tool the case never asked for / cases run |
+| Presentation quality | Average LLM-judge score for how the answer is *presented* — clarity, readability, directness. Tool selection is **not** judged here (the two accuracy axes already cover it) and factual correctness is ignored |
+| Answer accuracy | Compares the reply against the real data returned by running the case's expected tools, judged by an LLM. Deliberately orthogonal to presentation quality: a well-formatted answer built on invented figures scores high on one and zero on the other |
+
+Answer accuracy requires the dataset's `expectedAnswer` to hold that ground truth (the real output of running the case's `expectedTools`). Cases without it are excluded, and the axis disappears from the radar rather than showing 0%.
+
+### `adeval rejudge <EXP_ID>...`
+Re-score already-executed experiments with the current judge prompt, **without calling the agents again** (it reads the stored answers). Handy after changing the judge prompt, or to bring several experiments onto one rubric.
+- Accepts multiple experiment IDs.
+- `--judge-model`: Gemini model used for judging.
+- `--key`: Gemini API key (also read from `GEMINI_API_KEY`).
+
+### `adeval rescore <EXP_ID>...`
+Re-apply PASS/FAIL using the current comparison rules, **without calling the agents again**. After changing the comparison logic, this brings older experiments onto the same semantics without paying for another run.
+- `--verify-args / --no-verify-args`: whether argument equality decides PASS/FAIL.
+
+### `adeval rescore-answers <EXP_ID>... --dataset <DATASET_EXP_ID>`
+Score answer accuracy by comparing stored replies against what the tools really returned, **without calling the agents again**.
+Benchmark results carry no `expectedAnswer` of their own (that lives on the dataset), so `--dataset` supplies the ground truth and cases are matched by question text.
+- `--judge-model`, `--key`: as for `rejudge`.
 
 Accuracy uses **subset semantics**: every expected tool must appear, but extra exploratory calls are not penalised. This differs from `run`'s PASS/FAIL (set equality), which marks reasonable behaviour such as "list first, then inspect" as a failure.
 

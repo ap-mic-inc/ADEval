@@ -4,6 +4,8 @@ import uvicorn
 import webbrowser
 import os
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 from .server import app
 from .core import (
@@ -11,45 +13,89 @@ from .core import (
     delete_experiment_data, EvalRequest, save_experiment_data,
     get_config, save_config, import_csv, export_to_csv, GlobalConfig, request_with_retry,
     compare_tools, fetch_mcp_context, generate_test_cases, Experiment, uuid,
-    judge_test_case, parse_header_args, compute_metrics, extract_readonly_tools,
-    radar_profile, RADAR_AXES, TestCase
+    judge_test_case, judge_answer_correctness, parse_header_args, compute_metrics, extract_readonly_tools,
+    radar_profile, RADAR_AXES, TestCase, generate_negative_cases,
+    parse_mcp_tools, single_tool_context
 )
 
 
-def _execute_experiment(exp, verify_args, judge, judge_model, api_key, quiet=False):
+def _run_case(case, exp, verify_args, judge, judge_model, api_key, timeout=120):
+    """Execute one test case, mutate it in place, and report whether tools matched."""
+    req = EvalRequest(
+        app_name=case.appName, api_url=exp.apiUrl, user_id=exp.userId,
+        question=case.q, state=case.state, timeout=timeout
+    )
+    result = run_single_test(req)
+
+    case.actualTools = result.get("tools", "")
+    case.actualAnswer = result.get("answer", "")
+    case.rawResponse = result.get("raw_response")
+
+    # 1. Traditional Match
+    tools_match = compare_tools(case.expectedTools, case.actualTools, verify_args=verify_args)
+    case.status = 'PASS' if tools_match else 'FAIL'
+
+    # 2. LLM Judging — 呈現品質與事實正確性分開評，兩者刻意正交：
+    #    格式漂亮但數字錯的回覆，前者高分、後者低分。
+    if judge:
+        judgement = judge_test_case(case, api_key, model=judge_model)
+        case.judgeScore = judgement["score"]
+        case.judgeExplanation = judgement["explanation"]
+
+        correctness = judge_answer_correctness(case, api_key, model=judge_model)
+        case.answerScore = correctness["score"]
+        case.answerExplanation = correctness["explanation"]
+
+    return tools_match
+
+
+def _execute_experiment(exp, verify_args, judge, judge_model, api_key, quiet=False, concurrency=1, timeout=120):
     """Run every test case in an experiment, mutate it in place, and persist it.
 
     Shared by `run` and `benchmark`; `quiet` collapses the per-case output to a
     single progress line, which is what the multi-model runs need.
+
+    `concurrency` > 1 runs cases in a thread pool. Each case mints its own
+    session, so they are independent. Keep it at 1 for backends that serialise
+    requests -- a self-hosted model that queues will time out every case after
+    the first one blocks.
     """
     total = len(exp.testCases)
     passed = 0
+
+    if concurrency > 1:
+        lock = threading.Lock()
+        done = 0
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            futures = {
+                pool.submit(_run_case, case, exp, verify_args, judge, judge_model, api_key, timeout): case
+                for case in exp.testCases
+            }
+            for fut in as_completed(futures):
+                try:
+                    matched = fut.result()
+                except Exception as exc:
+                    case = futures[fut]
+                    case.status, case.actualTools = 'FAIL', 'Error'
+                    case.actualAnswer = f"Error: {exc}"
+                    matched = False
+                with lock:
+                    done += 1
+                    if matched:
+                        passed += 1
+                    mark = typer.style("●", fg=typer.colors.GREEN if matched else typer.colors.RED)
+                    typer.echo(f"\r  [{done}/{total}] {mark} ", nl=False)
+        typer.echo()
+        save_experiment_data(exp)
+        return passed
 
     for i, case in enumerate(exp.testCases):
         if not quiet:
             typer.echo(f"[{i+1}/{total}] Q: {case.q}")
 
-        req = EvalRequest(
-            app_name=case.appName, api_url=exp.apiUrl, user_id=exp.userId,
-            question=case.q, state=case.state
-        )
-        result = run_single_test(req)
-
-        case.actualTools = result.get("tools", "")
-        case.actualAnswer = result.get("answer", "")
-        case.rawResponse = result.get("raw_response")
-
-        # 1. Traditional Match
-        tools_match = compare_tools(case.expectedTools, case.actualTools, verify_args=verify_args)
-        case.status = 'PASS' if tools_match else 'FAIL'
+        tools_match = _run_case(case, exp, verify_args, judge, judge_model, api_key, timeout)
         if tools_match:
             passed += 1
-
-        # 2. LLM Judging
-        if judge:
-            judgement = judge_test_case(case, api_key, model=judge_model)
-            case.judgeScore = judgement["score"]
-            case.judgeExplanation = judgement["explanation"]
 
         if quiet:
             mark = typer.style("●", fg=typer.colors.GREEN if tools_match else typer.colors.RED)
@@ -103,22 +149,43 @@ def _print_metrics(exp, readonly_tools=None):
         return m
 
     typer.secho("🛠️  TOOL-USE METRICS", fg=typer.colors.CYAN, bold=True)
-    rows = [
-        ("有工具呼叫率", m["call_rate"], f"{m['called']}/{m['evaluated']}"),
-        ("函式名正確率", m["name_rate"], f"{m['name_hits']}/{m['scorable']}"),
-        ("名稱+參數全對率", m["arg_rate"], f"{m['arg_hits']}/{m['scorable']}"),
-        ("呼叫效率", m["efficiency"], "步數貼近預期"),
-    ]
+    typer.secho(
+        f"  正向題 {m['positive']}／負向題 {m['negative']}（共 {m['evaluated']} 已執行）",
+        fg=typer.colors.BRIGHT_BLACK,
+    )
+    # Positive-only axes are None on an all-negative dataset; skip them.
+    rows = []
+    if m["call_rate"] is not None:
+        rows.append(("有工具呼叫率", m["call_rate"], f"{m['called']}/{m['positive']}"))
+    if m["name_rate"] is not None:
+        rows.append(("函式名正確率", m["name_rate"], f"{m['name_hits']}/{m['scorable']}"))
+    if m["arg_rate"] is not None:
+        rows.append(("名稱+參數全對率", m["arg_rate"], f"{m['arg_hits']}/{m['scorable']}"))
+    if m["efficiency"] is not None:
+        rows.append(("呼叫工具次數吻合度", m["efficiency"], "步數貼近預期"))
+    if m.get("abstain_rate") is not None:
+        rows.append(("避免誤呼叫", m["abstain_rate"], f"{m['abstain_clean']}/{m['negative_count']} 負向題未誤呼叫"))
     if "readonly_rate" in m:
         rows.append(("唯讀遵循度", m["readonly_rate"], f"{m['readonly_clean']}/{m['evaluated']}"))
     if m["judge_avg"] is not None:
         rows.append(("呈現品質（judge）", m["judge_avg"], f"{m['judged']} 題已評分"))
+    if m.get("answer_avg") is not None:
+        rows.append(("答案正確率（judge）", m["answer_avg"], f"{m['answered']} 題已比對事實"))
 
     for label, rate, note in rows:
         bar = "█" * int(rate / 5) + "░" * (20 - int(rate / 5))
         typer.echo(f"  {_pad(label, 18)} ", nl=False)
         typer.secho(f"{bar} {rate:>5.1f}%", fg=_rate_color(rate), nl=False)
         typer.echo(f"  ({note})")
+
+    # Surplus arguments are style, not error: shown as a note rather than a bar.
+    if m.get("extra_arg_rate"):
+        seen = ", ".join(f"{k}×{v}" for k, v in list(m["extra_args_seen"].items())[:5])
+        typer.secho(
+            f"  ℹ️  額外參數率 {m['extra_arg_rate']}%"
+            f"（{m['extra_arg_cases']}/{m['arg_hits']} 題答對但多帶了參數：{seen}）",
+            fg=typer.colors.BRIGHT_BLACK,
+        )
 
     if m.get("readonly_violations"):
         offenders = ", ".join(f"{k}×{v}" for k, v in m["readonly_violations"].items())
@@ -306,7 +373,9 @@ def run_exp(
     verify_args: bool = typer.Option(True, "--verify-args/--no-verify-args", help="Whether to verify tool arguments"),
     judge: bool = typer.Option(False, "--judge", help="Use Gemini as a judge to evaluate performance"),
     judge_model: str = typer.Option("gemini-3-flash-preview", "--judge-model", help="Gemini model to use for judging"),
-    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key for judging")
+    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key for judging"),
+    concurrency: int = typer.Option(1, "--concurrency", "-c", min=1, help="Cases to run in parallel. Keep at 1 for backends that serialise requests"),
+    timeout: int = typer.Option(120, "--timeout", min=1, help="Seconds to wait for each /run call before giving up")
 ):
     """
     ▶️  [bold yellow]Run a specific experiment by ID.[/bold yellow]
@@ -323,7 +392,7 @@ def run_exp(
     typer.echo("=" * 60)
     
     total = len(exp.testCases)
-    passed = _execute_experiment(exp, verify_args, judge, judge_model, api_key)
+    passed = _execute_experiment(exp, verify_args, judge, judge_model, api_key, concurrency=concurrency, timeout=timeout)
 
     typer.echo("\n" + "=" * 60)
     typer.secho("📊 EXPERIMENT SUMMARY", fg=typer.colors.MAGENTA, bold=True)
@@ -333,6 +402,142 @@ def run_exp(
     typer.echo("-" * 60)
     _print_metrics(exp)
     typer.echo("=" * 60)
+
+@cli.command(name="rejudge")
+def rejudge_exp(
+    exp_ids: List[str] = typer.Argument(..., help="One or more experiment IDs to re-judge"),
+    judge_model: str = typer.Option("gemini-3-flash-preview", "--judge-model", help="Gemini model to use for judging"),
+    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key for judging")
+):
+    """
+    ⚖️  [bold magenta]Re-run the LLM judge on stored answers, without calling the agents again.[/bold magenta]
+
+    Useful after changing the judge prompt: it re-scores the answers already saved
+    in each experiment, so the whole set can be brought onto one rubric cheaply.
+    """
+    if not api_key:
+        typer.secho("❌ GEMINI_API_KEY is not set. Use --key or the environment variable.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    for exp_id in exp_ids:
+        exp = get_experiment(exp_id)
+        if not exp:
+            typer.secho(f"❌ Experiment '{exp_id}' not found, skipping.", fg=typer.colors.RED)
+            continue
+
+        scored = [c for c in exp.testCases if c.actualAnswer is not None]
+        if not scored:
+            typer.secho(f"⚠️  {exp_id} 尚未執行過（沒有 actualAnswer），跳過。", fg=typer.colors.YELLOW)
+            continue
+
+        typer.secho(f"⚖️  Re-judging {exp.name} ({exp.id}) — {len(scored)} 題", fg=typer.colors.CYAN, bold=True)
+        for i, case in enumerate(scored):
+            judgement = judge_test_case(case, api_key, model=judge_model)
+            case.judgeScore = judgement["score"]
+            case.judgeExplanation = judgement["explanation"]
+            color = typer.colors.GREEN if case.judgeScore >= 80 else (
+                typer.colors.YELLOW if case.judgeScore >= 50 else typer.colors.RED)
+            typer.echo(f"  [{i+1}/{len(scored)}] ", nl=False)
+            typer.secho(f"{case.judgeScore:>3}/100", fg=color, nl=False)
+            typer.echo(f"  {case.q[:50]}")
+
+        save_experiment_data(exp)
+        m = compute_metrics(exp)
+        typer.secho(f"  → 呈現品質平均：{m['judge_avg']}/100\n", fg=typer.colors.MAGENTA, bold=True)
+
+
+@cli.command(name="rescore")
+def rescore_exp(
+    exp_ids: List[str] = typer.Argument(..., help="One or more experiment IDs to re-score"),
+    verify_args: bool = typer.Option(True, "--verify-args/--no-verify-args", help="Whether tool-arg equality decides PASS/FAIL")
+):
+    """
+    ♻️  [bold magenta]Re-apply PASS/FAIL to stored answers, without calling the agents again.[/bold magenta]
+
+    Useful after changing the comparison rules: the agents' recorded calls are
+    re-compared, so an experiment run under older semantics can be brought onto
+    the current ones without paying for another run.
+    """
+    for exp_id in exp_ids:
+        exp = get_experiment(exp_id)
+        if not exp:
+            typer.secho(f"❌ Experiment '{exp_id}' not found, skipping.", fg=typer.colors.RED)
+            continue
+
+        scored = [c for c in exp.testCases if c.status]
+        if not scored:
+            typer.secho(f"⚠️  {exp_id} 尚未執行過，跳過。", fg=typer.colors.YELLOW)
+            continue
+
+        flipped = 0
+        for case in scored:
+            before = case.status
+            case.status = 'PASS' if compare_tools(case.expectedTools, case.actualTools, verify_args=verify_args) else 'FAIL'
+            if case.status != before:
+                flipped += 1
+
+        save_experiment_data(exp)
+        passed = sum(1 for c in scored if c.status == 'PASS')
+        typer.secho(
+            f"♻️  {exp.name} ({exp.id}): {passed}/{len(scored)} PASS"
+            f"（{flipped} 題判定改變）",
+            fg=typer.colors.CYAN, bold=True,
+        )
+
+
+@cli.command(name="rescore-answers")
+def rescore_answers(
+    exp_ids: List[str] = typer.Argument(..., help="One or more experiment IDs to score for factual accuracy"),
+    dataset: str = typer.Option(..., "--dataset", "-d", help="測資實驗 ID，提供 expectedAnswer 這份事實依據"),
+    judge_model: str = typer.Option("gemini-3-flash-preview", "--judge-model", help="Gemini model to use for judging"),
+    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key for judging")
+):
+    """
+    🎯  [bold magenta]Score factual accuracy on stored answers, without calling the agents again.[/bold magenta]
+
+    跑分結果不帶 expectedAnswer（那是測資的欄位），所以先從 --dataset 指定的測資
+    以題目文字對回去，再逐題比對模型回覆與工具真實回傳是否一致。
+    """
+    if not api_key:
+        typer.secho("❌ GEMINI_API_KEY is not set. Use --key or the environment variable.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+
+    source = get_experiment(dataset)
+    if not source:
+        typer.secho(f"❌ Dataset '{dataset}' not found.", fg=typer.colors.RED)
+        raise typer.Exit(1)
+    truth = {c.q: c.expectedAnswer for c in source.testCases if (c.expectedAnswer or "").strip()}
+    typer.secho(f"📚 事實依據：{source.name}（{len(truth)}/{len(source.testCases)} 題有 expectedAnswer）",
+                fg=typer.colors.BRIGHT_BLACK)
+
+    for exp_id in exp_ids:
+        exp = get_experiment(exp_id)
+        if not exp:
+            typer.secho(f"❌ Experiment '{exp_id}' not found, skipping.", fg=typer.colors.RED)
+            continue
+
+        scored = [c for c in exp.testCases if c.q in truth and c.actualAnswer is not None]
+        if not scored:
+            typer.secho(f"⚠️  {exp_id} 沒有可比對的題目，跳過。", fg=typer.colors.YELLOW)
+            continue
+
+        typer.secho(f"🎯 {exp.name} ({exp.id}) — {len(scored)} 題", fg=typer.colors.CYAN, bold=True)
+        for i, case in enumerate(scored):
+            case.expectedAnswer = truth[case.q]
+            result = judge_answer_correctness(case, api_key, model=judge_model)
+            case.answerScore = result["score"]
+            case.answerExplanation = result["explanation"]
+            score = case.answerScore if case.answerScore is not None else 0
+            color = typer.colors.GREEN if score >= 80 else (
+                typer.colors.YELLOW if score >= 50 else typer.colors.RED)
+            typer.echo(f"  [{i+1}/{len(scored)}] ", nl=False)
+            typer.secho(f"{score:>3}/100", fg=color, nl=False)
+            typer.echo(f"  {case.q[:46]}")
+
+        save_experiment_data(exp)
+        m = compute_metrics(exp)
+        typer.secho(f"  → 答案正確率：{m['answer_avg']}/100\n", fg=typer.colors.MAGENTA, bold=True)
+
 
 @cli.command(name="stats")
 def stats_exp(
@@ -374,7 +579,9 @@ def benchmark_exp(
     mcp: str = typer.Option(None, "--mcp", "-m", help="MCP server URL, used to score read-only compliance"),
     header: Optional[List[str]] = typer.Option(None, "--header", "-H", help="Extra MCP header as 'Key: Value'"),
     token: str = typer.Option(None, "--token", envvar="MCP_AUTH_TOKEN", help="Bearer token for the MCP server"),
-    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key for judging")
+    api_key: str = typer.Option(None, "--key", envvar="GEMINI_API_KEY", help="Gemini API Key for judging"),
+    concurrency: int = typer.Option(1, "--concurrency", "-c", min=1, help="Cases to run in parallel. Keep at 1 for backends that serialise requests"),
+    timeout: int = typer.Option(120, "--timeout", min=1, help="Seconds to wait for each /run call before giving up")
 ):
     """
     🕸️  [bold magenta]Run one dataset against several models and compare them.[/bold magenta]
@@ -427,7 +634,7 @@ def benchmark_exp(
         )
 
         typer.secho(f"\n▶️  {app_name}", fg=typer.colors.CYAN, bold=True)
-        _execute_experiment(run, verify_args, judge, judge_model, api_key, quiet=True)
+        _execute_experiment(run, verify_args, judge, judge_model, api_key, quiet=True, concurrency=concurrency, timeout=timeout)
         metrics = compute_metrics(run, readonly_tools=readonly_tools)
         results.append({"app": app_name, "exp": run, "metrics": metrics})
         typer.echo(f"  → {run.id}  pass {metrics['pass_rate']}%  名稱 {metrics['name_rate']}%  參數 {metrics['arg_rate']}%")
@@ -497,6 +704,8 @@ def gendata(
         help="Bearer token for the MCP server (shorthand for --header 'Authorization: Bearer ...')"
     ),
     num: int = typer.Option(5, "--num", "-n", help="Number of test cases to generate"),
+    per_tool: int = typer.Option(None, "--per-tool", help="Generate N cases PER tool, covering every tool the MCP exposes"),
+    no_tools: bool = typer.Option(False, "--no-tools", help="Generate NEGATIVE cases that should NOT trigger any tool"),
     name: str = typer.Option(None, "--name", help="Name of the experiment"),
     app: str = typer.Option(None, "--app", help="Target App Name for the experiment"),
     model: str = typer.Option("gemini-3-flash-preview", "--model", help="Gemini model to use for generation"),
@@ -507,12 +716,16 @@ def gendata(
 ):
     """
     🧠 [bold magenta]Generate test data using Gemini.[/bold magenta]
-    Based on an MCP server tools.
+
+    Three modes:
+      * default    — --num diverse cases across all tools
+      * --per-tool — N cases for EACH tool, so every tool is covered
+      * --no-tools — --num negative cases that should NOT call any tool
     """
     if not mcp:
         typer.secho("❌ Error: You must provide --mcp as a basis for generation.", fg=typer.colors.RED)
         raise typer.Exit(1)
-    
+
     if not api_key:
         typer.secho("❌ Error: GEMINI_API_KEY is not set. Use --key or set the environment variable.", fg=typer.colors.RED)
         raise typer.Exit(1)
@@ -535,29 +748,67 @@ def gendata(
         typer.secho(f"❌ Failed to fetch tools from MCP: {context}", fg=typer.colors.RED)
         raise typer.Exit(1)
 
-    typer.secho(f"🤖 Generating {num} test cases via Gemini ({model}, lang: {lang}, tools: {tools or 'auto'})...", fg=typer.colors.CYAN)
-    
     config = get_config()
     target_app = app or config.appName
-    
+
     try:
-        test_cases = generate_test_cases(context, num, api_key, model=model, lang=lang, description=desc, num_tools=tools)
+        if no_tools:
+            typer.secho(f"🤖 Generating {num} NEGATIVE cases (should not call any tool)...", fg=typer.colors.CYAN)
+            test_cases = generate_negative_cases(context, num, api_key, model=model, lang=lang, description=desc)
+            default_name = "Generated negative cases"
+
+        elif per_tool:
+            mcp_tools = parse_mcp_tools(context)
+            if not mcp_tools:
+                typer.secho("❌ 無法從 MCP 解析出工具清單。", fg=typer.colors.RED)
+                raise typer.Exit(1)
+            typer.secho(
+                f"🤖 Generating {per_tool} cases per tool × {len(mcp_tools)} tools "
+                f"= {per_tool * len(mcp_tools)} cases...", fg=typer.colors.CYAN)
+            test_cases = []
+            for i, tool in enumerate(mcp_tools):
+                tname = tool.get("name", f"tool_{i}")
+                typer.echo(f"  [{i+1}/{len(mcp_tools)}] {tname} ", nl=False)
+                try:
+                    cases = generate_test_cases(
+                        single_tool_context(tool), per_tool, api_key,
+                        model=model, lang=lang, description=desc, num_tools=1)
+                    # Pin the expected tool name so an occasional hallucination is caught.
+                    for c in cases:
+                        if tname.lower() not in c.expectedTools.lower():
+                            c.expectedTools = f"{tname}()"
+                    test_cases.extend(cases)
+                    typer.secho(f"→ {len(cases)} 題", fg=typer.colors.GREEN)
+                except Exception as e:
+                    typer.secho(f"→ 失敗（{str(e)[:60]}）", fg=typer.colors.RED)
+            default_name = "Generated per-tool coverage"
+
+        else:
+            typer.secho(f"🤖 Generating {num} cases ({model}, lang: {lang}, tools: {tools or 'auto'})...", fg=typer.colors.CYAN)
+            test_cases = generate_test_cases(context, num, api_key, model=model, lang=lang, description=desc, num_tools=tools)
+            default_name = "Generated from MCP"
+
         for tc in test_cases:
             tc.appName = target_app
-        
-        exp_name = name or f"Generated from MCP"
+
+        if not test_cases:
+            typer.secho("❌ 沒有生成任何題目。", fg=typer.colors.RED)
+            raise typer.Exit(1)
+
         exp = Experiment(
             id='exp_' + uuid.uuid4().hex[:9],
-            name=exp_name,
+            name=name or default_name,
             userId=config.userId,
             apiUrl=config.apiUrl,
             testCases=test_cases
         )
-        
+
         save_experiment_data(exp)
         typer.secho(f"✅ Successfully generated experiment: {exp.name} ({exp.id})", fg=typer.colors.GREEN, bold=True)
         typer.echo(f"   Total test cases: {len(test_cases)}")
-        
+
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.secho(f"❌ Generation failed: {str(e)}", fg=typer.colors.RED)
         raise typer.Exit(1)

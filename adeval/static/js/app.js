@@ -142,6 +142,21 @@ createApp({
             error: ''
         });
 
+        // How each axis is computed, surfaced behind the ⓘ next to the radar so
+        // a number on the chart can always be traced back to its definition.
+        const showMetricHelp = ref(false);
+        const METRIC_HELP = [
+            { name: '工具呼叫率', how: '期望使用工具的題目中，模型實際發出工具呼叫的比例。', note: '分母只含正向題；逾時或連線失敗算沒有呼叫。' },
+            { name: '函式名正確率', how: '期望的工具名稱是否全部出現在實際呼叫中。', note: '子集判定：多叫了別的工具不扣分。' },
+            { name: '參數正確率', how: '期望的每個呼叫都要被滿足：工具名相同，且期望的每個參數都存在、值相等。', note: '子集判定：多帶可選參數（如 limit=50）不扣分，改由「額外參數率」揭露。' },
+            { name: '呈現品質', how: 'LLM judge 依回答的組織、完整度與可讀性評分，取全題平均。', note: '只看寫得好不好，不看數字對不對——格式漂亮但資料是編的，這一軸仍會拿高分。' },
+            { name: '答案正確率', how: '把回答與「實際執行期望工具所得到的真實資料」比對，由 LLM 判斷是否如實反映。', note: '與呈現品質刻意正交。曾出現呈現 98 分、正確率 0 分的案例：表格排得漂亮，整張資料卻是模型自己編的。' },
+            { name: '呼叫工具次數吻合度', how: '實際呼叫次數與期望次數的接近程度，取全題平均。', note: '多叫或少叫都會低於 100%。只看次數，不看用了哪些工具或參數對不對；先探索再動作的模型會因為步數變多而降低。' },
+            { name: '唯讀遵循度', how: '呼叫到的工具全部屬於 MCP 標記 readOnlyHint 的題目比例。', note: '需填入 MCP URL 才會計算；逾時與棄權不算違規。' },
+            { name: '避免誤呼叫', how: '不該用工具的負向題中，模型正確棄權的比例。', note: '只有測資含負向題時才會出現這一軸。' },
+            { name: '額外參數率', how: '參數答對的題目中，另外多帶了可選參數的比例。', note: '僅供參考，不計入雷達圖也不扣分——它反映風格，不是錯誤。' }
+        ];
+
         const openBenchmark = () => {
             view.value = 'benchmark';
             // Default to comparing everything that looks like a benchmark run.
@@ -161,6 +176,66 @@ createApp({
             else benchmark.value.selected.splice(idx, 1);
             loadBenchmark();
         };
+
+        // --- 實驗矩陣：列=模型、欄=測資組 -----------------------------------
+        // 一個模型跑 N 組測資就產生 N 個實驗，攤平成一排 chip 到幾十個就選不動了。
+        // 拆成矩陣後，「看某模型的難度梯度」是選一整列，「跨模型比同一組」是選一整欄，
+        // 剛好對應實際會做的兩種比較。
+        const benchmarkGrid = computed(() => {
+            const runs = experiments.value.filter(e => e.name && e.name.includes(' @ '));
+            const datasets = [], models = [], cell = {};
+            for (const e of runs) {
+                const [ds, model] = e.name.split(' @ ');
+                if (!datasets.includes(ds)) datasets.push(ds);
+                if (!models.includes(model)) models.push(model);
+                cell[`${model}||${ds}`] = e.id;
+            }
+            // 難度組照 easy→medium→hard 排，其餘維持出現順序
+            const rank = d => ['easy', 'medium', 'hard'].findIndex(k => d.endsWith(k));
+            datasets.sort((a, b) => {
+                const ra = rank(a), rb = rank(b);
+                if (ra !== -1 && rb !== -1) return ra - rb;
+                if (ra !== -1) return -1;
+                if (rb !== -1) return 1;
+                return 0;
+            });
+            return { datasets, models, cell, total: runs.length };
+        });
+
+        const isPicked = (id) => !!id && benchmark.value.selected.includes(id);
+
+        const cellId = (model, ds) => benchmarkGrid.value.cell[`${model}||${ds}`];
+
+        const applySelection = (ids, on) => {
+            const set = new Set(benchmark.value.selected);
+            ids.filter(Boolean).forEach(id => on ? set.add(id) : set.delete(id));
+            benchmark.value.selected = [...set];
+            loadBenchmark();
+        };
+
+        const rowIds = (model) => benchmarkGrid.value.datasets.map(d => cellId(model, d));
+        const colIds = (ds) => benchmarkGrid.value.models.map(m => cellId(m, ds));
+
+        // 整列／整欄的按鈕是切換：全選中就取消，否則補齊
+        const toggleRow = (model) => {
+            const ids = rowIds(model).filter(Boolean);
+            applySelection(ids, !ids.every(isPicked));
+        };
+        const toggleCol = (ds) => {
+            const ids = colIds(ds).filter(Boolean);
+            applySelection(ids, !ids.every(isPicked));
+        };
+        const rowPicked = (model) => {
+            const ids = rowIds(model).filter(Boolean);
+            return ids.length > 0 && ids.every(isPicked);
+        };
+        const colPicked = (ds) => {
+            const ids = colIds(ds).filter(Boolean);
+            return ids.length > 0 && ids.every(isPicked);
+        };
+        const selectAllRuns = () => applySelection(
+            Object.values(benchmarkGrid.value.cell), true);
+        const clearRuns = () => { benchmark.value.selected = []; loadBenchmark(); };
 
         const loadBenchmark = async () => {
             if (!benchmark.value.selected.length) {
@@ -260,15 +335,23 @@ createApp({
             })
         );
 
+        // 一個軸「沒有資料」與「得 0 分」是兩回事：純負向資料集沒有工具呼叫率／
+        // 函式名／參數正確率可言，compute_metrics 因此回傳 None，radar_profile 也
+        // 已把該軸略去。若在前端用 ?? 0 補上，畫出來會像是那組表現極差。
+        const hasAxis = (series, axis) => typeof series?.radar?.[axis] === 'number';
+
         const radarSeries = computed(() =>
             benchmark.value.results.map((r, idx) => {
                 const color = RADAR_COLORS[idx % RADAR_COLORS.length];
+                // 缺值的軸不產生頂點，多邊形直接跳過它連向下一個有資料的軸。
                 const pts = radarAxes.value.map((axis, i) => {
-                    const value = r.radar?.[axis] ?? 0;
-                    const p = radarValuePoint(i, value);
-                    return { x: p.x, y: p.y, axis, value, active: selectedAxis.value === axis };
+                    const present = typeof r.radar?.[axis] === 'number';
+                    const value = present ? r.radar[axis] : null;
+                    const p = radarValuePoint(i, present ? value : 0);
+                    return { x: p.x, y: p.y, axis, value, present,
+                             active: selectedAxis.value === axis };
                 });
-                const values = radarAxes.value.map(a => r.radar?.[a] ?? 0);
+                const values = pts.filter(p => p.present).map(p => p.value);
                 const avg = values.length ? values.reduce((s, v) => s + v, 0) / values.length : 0;
                 return {
                     id: r.id,
@@ -278,8 +361,9 @@ createApp({
                     avg: Math.round(avg * 10) / 10,
                     metrics: r.metrics,
                     radar: r.radar,
-                    dots: pts,
-                    points: pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+                    dots: pts.filter(p => p.present),
+                    points: pts.filter(p => p.present)
+                        .map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
                 };
             })
         );
@@ -287,21 +371,26 @@ createApp({
         const radarBest = computed(() => {
             const best = {};
             for (const axis of radarAxes.value) {
-                best[axis] = Math.max(...radarSeries.value.map(s => s.radar?.[axis] ?? 0), 0);
+                const vals = radarSeries.value.filter(s => hasAxis(s, axis)).map(s => s.radar[axis]);
+                if (vals.length) best[axis] = Math.max(...vals);
             }
             return best;
         });
 
         // Ranking of every model on the focused axis, best first.
+        // 沒有這個指標的實驗直接不列入，排 0% 會誤導成墊底。
         const axisDetail = computed(() => {
             const axis = selectedAxis.value;
             if (!axis) return null;
             const rows = radarSeries.value
-                .map(s => ({ label: s.label, name: s.name, color: s.color, value: s.radar?.[axis] ?? 0 }))
+                .filter(s => hasAxis(s, axis))
+                .map(s => ({ label: s.label, name: s.name, color: s.color, value: s.radar[axis] }))
                 .sort((a, b) => b.value - a.value);
             const best = rows.length ? rows[0].value : 0;
             rows.forEach(r => { r.isBest = r.value === best; });
-            return { axis, rows };
+            const omitted = radarSeries.value.filter(s => !hasAxis(s, axis))
+                .map(s => s.name || s.label);
+            return { axis, rows, omitted };
         });
 
         const updateThemeClass = (val) => {
@@ -617,6 +706,9 @@ createApp({
             isGenerating, showGenerateModal, genConfig, generateExperiment,
             view, openBenchmark, openExperimentView,
             benchmark, toggleBenchmarkExp, loadBenchmark,
+            benchmarkGrid, isPicked, cellId, toggleRow, toggleCol,
+            rowPicked, colPicked, selectAllRuns, clearRuns,
+            showMetricHelp, METRIC_HELP,
             radarAxes, radarRings, radarSpokes, radarSeries, radarBest,
             selectedAxis, selectAxis, axisDetail,
             radarW: RADAR_W, radarH: RADAR_H, radarCx: RADAR_CX, radarCy: RADAR_CY,
