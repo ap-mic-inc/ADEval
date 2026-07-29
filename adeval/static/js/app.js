@@ -237,6 +237,309 @@ createApp({
             Object.values(benchmarkGrid.value.cell), true);
         const clearRuns = () => { benchmark.value.selected = []; loadBenchmark(); };
 
+        // --- 匯出獨立 HTML ------------------------------------------------
+        // 產生一份不依賴本服務的報告：資料內嵌成 JSON，雷達圖與表格由檔案內的
+        // 一小段 JS 依勾選狀態重繪。畫面上的雷達圖靠 Tailwind class 上色，複製
+        // DOM 會掉樣式，所以這裡重新產生純 SVG，顏色全部寫成 inline 屬性。
+        // 收到檔案的人不需要這台 server，也能自己篩選要比較哪幾個實驗。
+        const exportBenchmarkHtml = () => {
+            const series = radarSeries.value;
+            const axes = radarAxes.value;
+            if (!series.length) return;
+
+            const payload = {
+                axes,
+                stamp: new Date().toLocaleString('zh-TW'),
+                series: series.map(s => ({
+                    id: s.id, label: s.label, name: s.name,
+                    color: s.color, avg: s.avg, radar: s.radar,
+                })),
+                geom: { w: RADAR_W, h: RADAR_H, cx: RADAR_CX, cy: RADAR_CY, r: RADAR_R },
+            };
+
+            const html = `<!doctype html>
+<html lang="zh-Hant"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ADEval Benchmark — ${payload.stamp}</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;padding:40px 24px;background:#0f172a;color:#e2e8f0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Noto Sans TC",sans-serif}
+.wrap{max-width:1400px;margin:0 auto}
+h1{font-size:22px;font-weight:900;margin:0 0 4px}
+.sub{color:#64748b;font-size:12px;font-weight:700;margin-bottom:24px}
+.card{background:#1e293b;border:2px solid #334155;border-radius:24px;padding:24px;margin-bottom:20px}
+.card.flush{padding:0;overflow:hidden}
+.bar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.bar h2{font-size:10px;font-weight:900;color:#818cf8;text-transform:uppercase;letter-spacing:.12em;margin:0}
+.count{font-size:10px;font-weight:900;color:#64748b}
+.bar button{background:none;border:none;color:#64748b;font:inherit;font-size:10px;font-weight:900;
+  text-transform:uppercase;letter-spacing:.12em;cursor:pointer;padding:0}
+.bar button:hover{color:#818cf8}
+.chips{overflow-x:auto}
+.grid{border-collapse:separate;border-spacing:5px;font-size:11px}
+.grid th{font-weight:900;white-space:nowrap;padding:0}
+.grid thead th{font-size:10px;color:#64748b;cursor:pointer;text-align:center}
+.grid thead th:hover,.grid thead th.on{color:#818cf8}
+.grid tbody th{text-align:left;color:#94a3b8;cursor:pointer;padding-right:10px}
+.grid tbody th:hover,.grid tbody th.on{color:#818cf8}
+.cell{width:30px;height:30px;border-radius:9px;border:2px solid #334155;background:#0f172a;
+  cursor:pointer;padding:0;transition:border-color .15s;color:transparent;font-size:11px}
+.cell:hover{border-color:#6366f1}
+.cell.on{color:#fff;border-color:currentColor}
+.gap{display:inline-block;width:30px;height:30px;border-radius:9px;border:2px dashed #1e293b}
+.chart{display:flex;gap:32px;align-items:center;flex-wrap:wrap}
+svg{width:100%;max-width:620px;height:auto;flex:1 1 380px}
+.legend{flex:1 1 280px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.item{display:flex;align-items:center;gap:12px;border:2px solid #334155;border-radius:16px;padding:12px 16px}
+.dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+.meta{flex:1;min-width:0}
+.label{font-weight:900;font-size:13px}
+.name{color:#64748b;font-size:10px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avg{font-size:20px;font-weight:900;flex-shrink:0}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;font-size:13px;min-width:100%;width:max-content}
+th,td{padding:14px 18px;text-align:right;white-space:nowrap}
+thead{background:#172033}
+thead th{color:#64748b;font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.1em}
+tbody tr{border-top:1px solid #334155}
+tbody th{text-align:left;font-weight:900;color:#cbd5e1}
+/* 指標名固定在左側，橫向捲動時仍看得到自己在讀哪一列 */
+thead th:first-child,tbody th{position:sticky;left:0;z-index:1;background:#1e293b}
+thead th:first-child{background:#172033;text-align:left}
+td{font-variant-numeric:tabular-nums;font-weight:700;color:#94a3b8}
+td.best{color:#34d399;font-weight:900}
+td.na{color:#475569}
+.ds2{font-size:9px;font-weight:700;color:#64748b;text-transform:none;letter-spacing:normal;margin-top:2px}
+tr.sum{border-top:2px solid #475569;background:#172033}
+tr.sum th{background:#172033}
+tr.sum td{font-weight:900;font-size:15px}
+.foot{color:#475569;font-size:11px;font-weight:700;padding:14px 18px;border-top:1px solid #334155}
+.empty{color:#64748b;font-size:13px;font-weight:700;padding:40px;text-align:center}
+#radar text{cursor:pointer}
+.rank{border:2px solid #3730a3;border-radius:16px;overflow:hidden}
+.rank .hd{display:flex;align-items:center;justify-content:space-between;
+  background:#1e1b4b;padding:12px 18px}
+.rank .hd b{color:#a5b4fc;font-size:13px;font-weight:900}
+.rank .hd button{background:none;border:none;color:#64748b;font:inherit;font-size:10px;
+  font-weight:900;text-transform:uppercase;letter-spacing:.1em;cursor:pointer}
+.rank .hd button:hover{color:#f43f5e}
+.rank .row{display:flex;align-items:center;gap:12px;padding:11px 18px;border-top:1px solid #334155}
+.rank .no{width:20px;color:#475569;font-size:11px;font-weight:900}
+.rank .val{font-family:ui-monospace,monospace;font-weight:900;font-size:13px;
+  width:58px;text-align:right}
+.rank .omit{padding:11px 18px;border-top:1px solid #334155;color:#475569;
+  font-size:10px;font-weight:700;line-height:1.6}
+tbody tr{cursor:pointer}
+tbody tr.on{background:#1e1b4b}
+tbody tr.on th{background:#1e1b4b;color:#a5b4fc}
+@media print{
+  body{background:#fff;color:#000}.card{background:#fff;border-color:#ddd}
+  .bar,.chips{display:none}thead th:first-child,tbody th{background:#fff}
+}
+</style></head><body><div class="wrap">
+<h1>效能雷達圖 — MCP 工具使用能力</h1>
+<div class="sub">所有軸皆為 0–100%，越外圈越好　·　匯出於 ${payload.stamp}</div>
+
+<div class="card">
+  <div class="bar">
+    <h2>顯示哪些實驗</h2>
+    <span class="count" style="color:#475569">點格子選單一　·　點模型名選整列　·　點測資名選整欄</span>
+    <span class="count" id="count"></span>
+    <button id="all">全選</button>
+    <button id="none">清除</button>
+  </div>
+  <div class="chips"><table class="grid" id="grid"></table></div>
+</div>
+
+<div class="card"><div class="chart">
+  <svg id="radar" viewBox="0 0 ${RADAR_W} ${RADAR_H}" preserveAspectRatio="xMidYMid meet"></svg>
+  <div class="legend" id="legend"></div>
+</div></div>
+
+<div class="card flush">
+  <div class="scroll"><table id="table"></table></div>
+  <div class="foot">綠色為該指標最佳值　·　「—」表示該實驗沒有這項指標（例如純負向資料集沒有工具呼叫率）</div>
+</div>
+</div>
+
+<script>
+const DATA = ${JSON.stringify(payload)};
+const on = new Set(DATA.series.map(s => s.id));
+let focused = null;
+const g = DATA.geom;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pt = (i, r, n) => {
+  const a = Math.PI * 2 * i / (n || 1) - Math.PI / 2;
+  return [g.cx + Math.cos(a) * r, g.cy + Math.sin(a) * r];
+};
+
+function render() {
+  const shown = DATA.series.filter(s => on.has(s.id));
+  // 只保留至少一個選取實驗有資料的軸，否則畫出來會有空軸
+  const axes = DATA.axes.filter(a => shown.some(s => typeof s.radar[a] === 'number'));
+  const n = axes.length;
+
+  document.getElementById('count').textContent = \`已選 \${shown.length} / \${DATA.series.length}\`;
+  document.querySelectorAll('.cell').forEach(c => {
+    const picked = on.has(c.dataset.id);
+    c.classList.toggle('on', picked);
+    c.style.background = picked ? c.dataset.color : '';
+    c.style.borderColor = picked ? c.dataset.color : '';
+  });
+  document.querySelectorAll('.grid tbody th').forEach(th =>
+    th.classList.toggle('on', GRID.models[th.dataset.model].every(id => on.has(id))));
+  document.querySelectorAll('.grid thead th[data-ds]').forEach(th =>
+    th.classList.toggle('on', GRID.datasets[th.dataset.ds].every(id => on.has(id))));
+
+  const svg = document.getElementById('radar');
+  if (!n) {
+    svg.innerHTML = '';
+    document.getElementById('legend').innerHTML = '<div class="empty">請至少選擇一個實驗</div>';
+    document.getElementById('table').innerHTML = '';
+    return;
+  }
+
+  const ring = r => axes.map((_, i) => pt(i, r, n).map(v => v.toFixed(1)).join(',')).join(' ');
+  let out = [1, .8, .6, .4, .2]
+    .map(f => \`<polygon points="\${ring(g.r * f)}" fill="none" stroke="#374151" stroke-width="1"/>\`).join('');
+  out += axes.map((_, i) => {
+    const [x, y] = pt(i, g.r, n);
+    return \`<line x1="\${g.cx}" y1="\${g.cy}" x2="\${x.toFixed(1)}" y2="\${y.toFixed(1)}" stroke="#374151" stroke-width="1"/>\`;
+  }).join('');
+  out += shown.map(s => {
+    const pts = axes.filter(a => typeof s.radar[a] === 'number').map(a => {
+      const i = axes.indexOf(a);
+      return pt(i, Math.max(0, Math.min(100, s.radar[a])) / 100 * g.r, n).map(v => v.toFixed(1)).join(',');
+    }).join(' ');
+    return \`<polygon points="\${pts}" fill="\${s.color}" fill-opacity="0.12" stroke="\${s.color}" stroke-width="2.5" stroke-linejoin="round"/>\`;
+  }).join('');
+  out += axes.map((a, i) => {
+    const [x, y] = pt(i, g.r + 30, n);
+    const dx = x - g.cx;
+    const anchor = Math.abs(dx) < 8 ? 'middle' : (dx > 0 ? 'start' : 'end');
+    const hot = a === focused;
+    return \`<text x="\${x.toFixed(1)}" y="\${y.toFixed(1)}" text-anchor="\${anchor}" data-axis="\${esc(a)}" fill="\${hot ? '#818cf8' : '#9ca3af'}" style="font-size:13px;font-weight:800;text-decoration:\${hot ? 'underline' : 'none'}">\${esc(a)}</text>\`;
+  }).join('');
+  svg.innerHTML = out;
+
+  const legendEl = document.getElementById('legend');
+  if (focused && axes.includes(focused)) {
+    // 聚焦某一軸時列出排名。沒有這項指標的實驗排除而非以 0 計，
+    // 但要講明白是哪些被略過，否則看起來像漏掉。
+    const rows = shown.filter(s => typeof s.radar[focused] === 'number')
+      .sort((a, b) => b.radar[focused] - a.radar[focused]);
+    const best = rows.length ? rows[0].radar[focused] : null;
+    const omitted = shown.filter(s => typeof s.radar[focused] !== 'number');
+    legendEl.innerHTML = \`<div class="rank">
+      <div class="hd"><b>\${esc(focused)}</b><button id="unfocus">✕ 清除</button></div>
+      \${rows.map((s, i) => \`<div class="row">
+        <span class="no">\${i + 1}</span>
+        <span class="dot" style="background:\${s.color}"></span>
+        <div class="meta"><div class="label">\${esc(s.label)}</div><div class="name">\${esc(s.name)}</div></div>
+        <span class="val" style="color:\${s.color}">\${s.radar[focused].toFixed(1)}%\${s.radar[focused] === best ? ' \u2605' : ''}</span>
+      </div>\`).join('')}
+      \${omitted.length ? \`<div class="omit">以下沒有這項指標，故未列入：\${omitted.map(s => esc(s.name)).join('、')}</div>\` : ''}
+    </div>\`;
+    const btn = document.getElementById('unfocus');
+    if (btn) btn.onclick = () => { focused = null; render(); };
+  } else {
+    legendEl.innerHTML = shown.map(s => \`
+      <div class="item">
+        <span class="dot" style="background:\${s.color}"></span>
+        <div class="meta"><div class="label">\${esc(s.label)}</div><div class="name">\${esc(s.name)}</div></div>
+        <div class="avg" style="color:\${s.color}">\${s.avg}%</div>
+      </div>\`).join('');
+  }
+
+  const head = '<thead><tr><th>指標</th>' +
+    shown.map(s => \`<th><div style="color:\${s.color}">\${esc(s.label)}</div><div class="ds2">\${esc((s.name || '').split(' @ ')[0])}</div></th>\`).join('') + '</tr></thead>';
+  const body = axes.map(a => {
+    const vals = shown.filter(s => typeof s.radar[a] === 'number').map(s => s.radar[a]);
+    const best = vals.length ? Math.max(...vals) : null;
+    const cells = shown.map(s => {
+      const v = s.radar[a];
+      if (typeof v !== 'number') return '<td class="na">—</td>';
+      return \`<td\${v === best ? ' class="best"' : ''}>\${v.toFixed(1)}%</td>\`;
+    }).join('');
+    return \`<tr data-axis="\${esc(a)}"\${a === focused ? ' class="on"' : ''}><th>\${esc(a)}</th>\${cells}</tr>\`;
+  }).join('');
+  const foot = '<tr class="sum"><th>綜合（軸平均）</th>' +
+    shown.map(s => \`<td style="color:\${s.color}">\${s.avg}%</td>\`).join('') + '</tr>';
+  document.getElementById('table').innerHTML = head + '<tbody>' + body + foot + '</tbody>';
+}
+
+// 攤平成一排 chip 時，數十個實驗根本選不動。拆成「模型 × 測資」矩陣後，
+// 點列頭是看某模型的難度梯度，點欄頭是跨模型比同一組——正好是兩種常做的比較。
+const GRID = (() => {
+  const dsOrder = [], mdOrder = [], cell = {}, models = {}, datasets = {};
+  DATA.series.forEach(s => {
+    const parts = (s.name || '').split(' @ ');
+    const ds = parts[0] || '(未命名)', md = parts[1] || s.label;
+    if (!dsOrder.includes(ds)) dsOrder.push(ds);
+    if (!mdOrder.includes(md)) mdOrder.push(md);
+    cell[md + '||' + ds] = s;
+    (models[md] = models[md] || []).push(s.id);
+    (datasets[ds] = datasets[ds] || []).push(s.id);
+  });
+  const rank = d => ['easy', 'medium', 'hard'].findIndex(k => d.endsWith(k));
+  dsOrder.sort((a, b) => {
+    const ra = rank(a), rb = rank(b);
+    if (ra !== -1 && rb !== -1) return ra - rb;
+    if (ra !== -1) return -1;
+    if (rb !== -1) return 1;
+    return 0;
+  });
+  return { dsOrder, mdOrder, cell, models, datasets };
+})();
+
+document.getElementById('grid').innerHTML =
+  '<thead><tr><th></th>' +
+  GRID.dsOrder.map(ds => \`<th data-ds="\${esc(ds)}">\${esc(ds.replace(/^sqlite-/, ''))}</th>\`).join('') +
+  '</tr></thead><tbody>' +
+  GRID.mdOrder.map(md => '<tr><th data-model="' + esc(md) + '">' + esc(md) + '</th>' +
+    GRID.dsOrder.map(ds => {
+      const s = GRID.cell[md + '||' + ds];
+      return s
+        ? \`<td><button class="cell" data-id="\${esc(s.id)}" data-color="\${s.color}" title="\${esc(s.name)}">\u2713</button></td>\`
+        : '<td><span class="gap" title="這個組合沒有跑過"></span></td>';
+    }).join('') + '</tr>').join('') +
+  '</tbody>';
+
+const setMany = (ids, want) => { ids.forEach(id => want ? on.add(id) : on.delete(id)); render(); };
+document.getElementById('grid').addEventListener('click', e => {
+  const cell = e.target.closest('.cell');
+  if (cell) { const id = cell.dataset.id; on.has(id) ? on.delete(id) : on.add(id); return render(); }
+  const rowTh = e.target.closest('tbody th[data-model]');
+  if (rowTh) { const ids = GRID.models[rowTh.dataset.model]; return setMany(ids, !ids.every(i => on.has(i))); }
+  const colTh = e.target.closest('thead th[data-ds]');
+  if (colTh) { const ids = GRID.datasets[colTh.dataset.ds]; return setMany(ids, !ids.every(i => on.has(i))); }
+});
+// 軸標籤與表格列都可點來聚焦，再點一次取消
+const toggleAxis = a => { focused = (focused === a) ? null : a; render(); };
+document.getElementById('radar').addEventListener('click', e => {
+  const a = e.target.dataset && e.target.dataset.axis;
+  if (a) toggleAxis(a);
+});
+document.getElementById('table').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-axis]');
+  if (tr) toggleAxis(tr.dataset.axis);
+});
+document.getElementById('all').onclick = () => { DATA.series.forEach(s => on.add(s.id)); render(); };
+document.getElementById('none').onclick = () => { on.clear(); render(); };
+render();
+<\/script>
+</body></html>`;
+
+            const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `adeval-benchmark-${new Date().toISOString().slice(0, 10)}.html`;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        };
+
         const loadBenchmark = async () => {
             if (!benchmark.value.selected.length) {
                 benchmark.value.results = [];
@@ -707,7 +1010,7 @@ createApp({
             view, openBenchmark, openExperimentView,
             benchmark, toggleBenchmarkExp, loadBenchmark,
             benchmarkGrid, isPicked, cellId, toggleRow, toggleCol,
-            rowPicked, colPicked, selectAllRuns, clearRuns,
+            rowPicked, colPicked, selectAllRuns, clearRuns, exportBenchmarkHtml,
             showMetricHelp, METRIC_HELP,
             radarAxes, radarRings, radarSpokes, radarSeries, radarBest,
             selectedAxis, selectAxis, axisDetail,

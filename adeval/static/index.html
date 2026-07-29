@@ -573,6 +573,11 @@
                                 class="w-6 h-6 rounded-full border-2 hover:text-indigo-500 hover:border-indigo-400 transition-all hover:scale-110 active:scale-95 flex items-center justify-center shrink-0">
                                 <i class="fas fa-info text-[10px]"></i>
                             </button>
+                            <!-- 匯出的是 self-contained HTML：離線可看、可轉寄，不需要這台 server -->
+                            <button @click="exportBenchmarkHtml" title="匯出成可獨立開啟的 HTML"
+                                class="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl border-2 border-gray-200 dark:border-gray-700 text-[10px] font-black uppercase tracking-widest text-gray-500 dark:text-gray-400 hover:text-indigo-500 hover:border-indigo-400 transition-all active:scale-95 shrink-0">
+                                <i class="fas fa-file-export"></i>匯出 HTML
+                            </button>
                         </div>
                         <p class="text-xs text-gray-400 dark:text-gray-600 font-bold mb-6">所有軸皆為 0–100%，越外圈越好。<span class="text-indigo-400">點擊任一軸標籤可聚焦該指標並查看各模型排名。</span></p>
 
@@ -694,28 +699,38 @@
                     </div>
 
                     <div v-if="radarSeries.length" class="bg-white dark:bg-darkcard rounded-[2rem] border-2 dark:border-gray-800 border-gray-100 shadow-sm overflow-hidden transition-theme">
+                        <!-- 欄數等於選取的實驗數，可能有數十個：讓表格依內容撐開，
+                             由這層負責橫向捲動；w-full 會與 whitespace-nowrap 打架而溢出卡片。 -->
                         <div class="overflow-x-auto">
-                            <table class="w-full text-sm">
+                            <table class="min-w-full w-max text-sm">
                                 <thead class="bg-gray-50 dark:bg-gray-900/50">
                                     <tr>
-                                        <th class="text-left p-5 text-[10px] font-black text-gray-400 uppercase tracking-widest">指標</th>
-                                        <th v-for="s in radarSeries" :key="'th'+s.id" class="text-right p-5 text-[10px] font-black uppercase tracking-widest whitespace-nowrap" :style="{ color: s.color }">{{ s.label }}</th>
+                                        <th class="text-left p-5 text-[10px] font-black text-gray-400 uppercase tracking-widest sticky left-0 bg-gray-50 dark:bg-gray-900/50 z-10">指標</th>
+                                        <!-- 同一個模型可能跑過多份測資，只印模型名會出現好幾欄同名而分不清，
+                                             因此補上測資名。 -->
+                                        <th v-for="s in radarSeries" :key="'th'+s.id" class="text-right p-5 whitespace-nowrap align-bottom">
+                                            <div class="text-[10px] font-black uppercase tracking-widest" :style="{ color: s.color }">{{ s.label }}</div>
+                                            <div class="text-[9px] font-bold normal-case tracking-normal text-gray-400 dark:text-gray-500">{{ (s.name || '').split(' @ ')[0] }}</div>
+                                        </th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr v-for="axis in radarAxes" :key="axis" @click="selectAxis(axis)" style="cursor: pointer"
                                         :class="selectedAxis === axis ? 'bg-indigo-50 dark:bg-indigo-900/20' : 'hover:bg-gray-50 dark:hover:bg-gray-800/50'"
                                         class="border-t dark:border-gray-800 transition-colors">
-                                        <td class="p-5 font-black whitespace-nowrap" :class="selectedAxis === axis ? 'text-indigo-600 dark:text-indigo-300' : 'text-gray-600 dark:text-gray-300'">
+                                        <td class="p-5 font-black whitespace-nowrap sticky left-0 z-10"
+                                            :class="[selectedAxis === axis ? 'text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20' : 'text-gray-600 dark:text-gray-300 bg-white dark:bg-darkcard']">
                                             <i class="fas fa-crosshairs mr-2 text-[10px]" :class="selectedAxis === axis ? 'text-indigo-500' : 'text-gray-300 dark:text-gray-700'"></i>{{ axis }}
                                         </td>
+                                        <!-- 沒有這項指標時顯示破折號，補 0 會讓純負向資料集看起來像考了 0 分 -->
                                         <td v-for="s in radarSeries" :key="s.id + axis" class="p-5 text-right font-mono font-bold"
-                                            :class="(s.radar[axis] ?? 0) === radarBest[axis] ? 'text-emerald-500 font-black' : 'text-gray-500 dark:text-gray-400'">
-                                            {{ (s.radar[axis] ?? 0).toFixed(1) }}%
+                                            :class="typeof s.radar[axis] !== 'number' ? 'text-gray-300 dark:text-gray-700'
+                                                    : (s.radar[axis] === radarBest[axis] ? 'text-emerald-500 font-black' : 'text-gray-500 dark:text-gray-400')">
+                                            {{ typeof s.radar[axis] === 'number' ? s.radar[axis].toFixed(1) + '%' : '—' }}
                                         </td>
                                     </tr>
                                     <tr class="border-t-2 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                                        <td class="p-5 font-black text-gray-800 dark:text-gray-100 whitespace-nowrap">綜合（軸平均）</td>
+                                        <td class="p-5 font-black text-gray-800 dark:text-gray-100 whitespace-nowrap sticky left-0 z-10 bg-gray-50 dark:bg-gray-900/50">綜合（軸平均）</td>
                                         <td v-for="s in radarSeries" :key="'avg'+s.id" class="p-5 text-right font-mono font-black" :style="{ color: s.color }">{{ s.avg }}%</td>
                                     </tr>
                                 </tbody>

@@ -28,6 +28,14 @@ Import dozens or hundreds of test cases via CSV.
 - **Export**: Generate reports or backup your question bank.
 - **Progress Monitoring**: Real-time progress bars for long-running batch tests.
 
-## 5. UI Customization
+## 5. Cross-Model Comparison (Benchmark)
+
+Overlay several experiments on one radar chart in the BENCHMARK tab.
+
+- **Matrix picker**: Select by a model × dataset grid. Click a cell for a single experiment, a model name for all its datasets (to read the difficulty gradient), or a dataset name for every model (to compare across models). A flat row of chips becomes unusable once there are dozens of runs.
+- **Focus one metric**: Click a radar axis label or any row of the metrics table and the panel switches to a ranking for that metric, marking the best value. Experiments without the metric are excluded rather than counted as 0, and the panel names which ones were left out.
+- **Export standalone HTML**: Save the current comparison as a single HTML file. It **does not depend on this service** and pulls in no external resources, so it opens offline and can be forwarded as-is. The exported file keeps the matrix picker and metric focus, letting the recipient adjust which experiments to compare; printing switches it to a light background and hides the controls.
+
+## 6. UI Customization
 - **Dark/Light Mode**: Switch between themes for better accessibility.
 - **Responsive Design**: Works well on desktops and tablets.
